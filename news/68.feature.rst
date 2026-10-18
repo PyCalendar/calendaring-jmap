@@ -1,0 +1,1 @@
+``create_event``, ``send_invite``, ``update_event``, and ``delete_event`` now accept an optional ``if_in_state`` argument. The server rejects the write with ``JMAPMethodError`` (``error_type == "stateMismatch"``) if the account's state has moved since, instead of silently applying over a concurrent change.

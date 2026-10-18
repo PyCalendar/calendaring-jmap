@@ -124,6 +124,7 @@ def build_event_query(
     limit: int | None = None,
     expand_recurrences: bool = False,
     time_zone: str | None = None,
+    calculate_total: bool = False,
 ) -> tuple:
     """Build a ``CalendarEvent/query`` method call tuple.
 
@@ -151,6 +152,7 @@ def build_event_query(
             fall in the window.
         time_zone: The time zone for ``after``/``before``, defaults to
             ``Etc/UTC`` server-side if omitted.
+        calculate_total: See ``build_query``.
 
     Returns:
         A 3-tuple ``("CalendarEvent/query", arguments_dict, call_id)``.
@@ -163,6 +165,7 @@ def build_event_query(
         sort,
         position,
         limit,
+        calculate_total,
     )
     if expand_recurrences:
         args["expandRecurrences"] = expand_recurrences
@@ -194,10 +197,34 @@ def build_event_get_by_query_result(account_id: str, properties: list[str] | Non
     )
 
 
+def parse_event_query(response_args: dict) -> tuple[int, int | None]:
+    """Parse the arguments dict from a ``CalendarEvent/query`` response.
+
+    Args:
+        response_args: The second element of a ``methodResponses`` entry
+            whose method name is ``"CalendarEvent/query"``.
+
+    Returns:
+        A 2-tuple ``(position, total)``:
+
+        - ``position``: Zero-based index of the first id in this response
+            within the complete result set (RFC 8620 section 5.5).
+        - ``total``: Total number of matching results, or ``None`` if the
+            server didn't include one. Callers that care whether this is
+            genuinely absent versus the server ignoring ``calculateTotal``
+            should gate on their own request, not on this return value:
+            confirmed live that Cyrus includes ``total`` unconditionally,
+            which RFC 8620 section 5.5 says the server "MUST" omit when
+            ``calculateTotal`` wasn't requested.
+    """
+    return response_args.get("position", 0), response_args.get("total")
+
+
 def build_event_set_create(
     account_id: str,
     events: dict[str, dict],
     send_scheduling_messages: bool = False,
+    if_in_state: str | None = None,
 ) -> tuple:
     """Build a ``CalendarEvent/set`` method call for creating events.
 
@@ -209,25 +236,30 @@ def build_event_set_create(
             batch call.
         send_scheduling_messages: If true, the server sends iTIP scheduling
             messages to the event's participants (draft-ietf-jmap-calendars section 5.9).
+        if_in_state: A state string from a prior ``CalendarEvent/get`` or
+            ``CalendarEvent/changes`` response. If given and the account's
+            current state has moved past it, the server rejects the whole
+            call with a ``stateMismatch`` error instead of applying it
+            (RFC 8620 section 5.3). ``None`` means apply unconditionally.
 
     Returns:
         A 3-tuple ``("CalendarEvent/set", arguments_dict, call_id)``.
     """
-    return (
-        "CalendarEvent/set",
-        {
-            "accountId": account_id,
-            "create": dict(events),
-            "sendSchedulingMessages": send_scheduling_messages,
-        },
-        "ev-set-create-0",
-    )
+    args: dict = {
+        "accountId": account_id,
+        "create": dict(events),
+        "sendSchedulingMessages": send_scheduling_messages,
+    }
+    if if_in_state is not None:
+        args["ifInState"] = if_in_state
+    return ("CalendarEvent/set", args, "ev-set-create-0")
 
 
 def build_event_set_update(
     account_id: str,
     updates: dict[str, dict],
     send_scheduling_messages: bool = False,
+    if_in_state: str | None = None,
 ) -> tuple:
     """Build a ``CalendarEvent/set`` method call for updating events.
 
@@ -240,25 +272,26 @@ def build_event_set_update(
         send_scheduling_messages: If true, the server sends iTIP scheduling
             messages to the event's participants, or back to the organizer
             if this account isn't the event's origin (draft-ietf-jmap-calendars section 5.9).
+        if_in_state: See ``build_event_set_create``.
 
     Returns:
         A 3-tuple ``("CalendarEvent/set", arguments_dict, call_id)``.
     """
-    return (
-        "CalendarEvent/set",
-        {
-            "accountId": account_id,
-            "update": updates,
-            "sendSchedulingMessages": send_scheduling_messages,
-        },
-        "ev-set-update-0",
-    )
+    args: dict = {
+        "accountId": account_id,
+        "update": updates,
+        "sendSchedulingMessages": send_scheduling_messages,
+    }
+    if if_in_state is not None:
+        args["ifInState"] = if_in_state
+    return ("CalendarEvent/set", args, "ev-set-update-0")
 
 
 def build_event_set_destroy(
     account_id: str,
     ids: list[str],
     send_scheduling_messages: bool = False,
+    if_in_state: str | None = None,
 ) -> tuple:
     """Build a ``CalendarEvent/set`` method call for destroying events.
 
@@ -268,19 +301,19 @@ def build_event_set_destroy(
         send_scheduling_messages: If true, and this account is the event's
             origin, the server sends an iTIP CANCEL to the event's
             participants (draft-ietf-jmap-calendars section 5.9.2.2).
+        if_in_state: See ``build_event_set_create``.
 
     Returns:
         A 3-tuple ``("CalendarEvent/set", arguments_dict, call_id)``.
     """
-    return (
-        "CalendarEvent/set",
-        {
-            "accountId": account_id,
-            "destroy": ids,
-            "sendSchedulingMessages": send_scheduling_messages,
-        },
-        "ev-set-destroy-0",
-    )
+    args: dict = {
+        "accountId": account_id,
+        "destroy": ids,
+        "sendSchedulingMessages": send_scheduling_messages,
+    }
+    if if_in_state is not None:
+        args["ifInState"] = if_in_state
+    return ("CalendarEvent/set", args, "ev-set-destroy-0")
 
 
 def parse_event_set(

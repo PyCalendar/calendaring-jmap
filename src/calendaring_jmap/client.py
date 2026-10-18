@@ -45,6 +45,7 @@ from calendaring_jmap._methods.event import (
     build_event_set_update,
     parse_event_changes,
     parse_event_get,
+    parse_event_query,
     parse_event_set,
 )
 from calendaring_jmap._methods.principal import build_get_availability, parse_get_availability
@@ -96,6 +97,7 @@ from calendaring_jmap.objects.busy_interval import BusyInterval
 from calendaring_jmap.objects.calendar import JMAPCalendar
 from calendaring_jmap.objects.calendar_object import JMAPCalendarObject
 from calendaring_jmap.objects.contact import JMAPAddressBook, JMAPContact
+from calendaring_jmap.objects.event_search_result import EventSearchResult
 from calendaring_jmap.session import Session, _expand_uri_template, fetch_session
 
 log = logging.getLogger("calendaring_jmap")
@@ -298,6 +300,9 @@ class _JMAPClientBase:
         start: str | None,
         end: str | None,
         text: str | None,
+        position: int = 0,
+        limit: int | None = None,
+        calculate_total: bool = False,
     ) -> list[tuple]:
         """Return a batched [CalendarEvent/query, CalendarEvent/get] call list for _search."""
         # JMAP Calendars draft-29 section 5.11.1 defines this as "inCalendar"
@@ -305,7 +310,13 @@ class _JMAPClientBase:
         filter_condition = _JMAPClientBase._filter_from(
             inCalendar=calendar_id, after=start, before=end, text=text
         )
-        query_call = build_event_query(account_id, filter_condition=filter_condition)
+        query_call = build_event_query(
+            account_id,
+            filter_condition=filter_condition,
+            position=position,
+            limit=limit,
+            calculate_total=calculate_total,
+        )
         get_call = build_event_get_by_query_result(account_id)
         return [query_call, get_call]
 
@@ -685,6 +696,17 @@ class _JMAPClientBase:
         )
 
     @staticmethod
+    def _parse_event_query_response(responses: list) -> tuple[int, int | None]:
+        """Return ``(position, total)`` from the ``CalendarEvent/query`` response.
+
+        ``(0, None)`` if no such response is present in ``responses``.
+        """
+        for name, resp_args, _ in responses:
+            if name == "CalendarEvent/query":
+                return parse_event_query(resp_args)
+        return 0, None
+
+    @staticmethod
     def _parse_availability_fallback_response(responses: list) -> list[BusyInterval]:
         """Parse the ``CalendarEvent/get`` response from
         ``_build_availability_fallback_calls`` into busy intervals.
@@ -721,11 +743,9 @@ class _JMAPClientBase:
     @staticmethod
     def _parse_changes_response(
         responses: list,
-        api_url: str,
         method_name: str,
         parse_changes,
-        retry_hint: str,
-    ) -> tuple[list[str], list[str], list[str], str]:
+    ) -> tuple[list[str], list[str], list[str], str, str, bool]:
         """Parse a ``<Type>/changes`` response.
 
         Shared by every ``_parse_*_changes_response`` (CalendarEvent, Task):
@@ -733,36 +753,37 @@ class _JMAPClientBase:
         function that turns ``resp_args`` into the 6-tuple RFC 8620 section 5.2
         defines.
 
-        Returns ``(created_ids, updated_ids, destroyed_ids, new_sync_token)``.
-        Raises ``JMAPMethodError`` when the server truncated the result.
+        Returns ``(created_ids, updated_ids, destroyed_ids, old_state,
+        new_state, has_more_changes)``. Does not raise on
+        ``hasMoreChanges: true``, RFC 8620 section 5.2 treats a truncated
+        page as normal operation, not an error: the caller may call
+        ``<Type>/changes`` again with ``new_state`` to fetch the next page.
+        ``old_state`` is the ``sinceState`` argument echoed back by the
+        server; comparing it against the state the caller actually sent is
+        how a caller detects a server that silently accepted an invalid or
+        stale state instead of erroring (confirmed live against Cyrus,
+        which echoes back whatever ``sinceState`` it was given, valid or
+        not, rather than rejecting it).
         """
         created_ids: list[str] = []
         updated_ids: list[str] = []
         destroyed: list[str] = []
-        new_sync_token: str = ""
+        old_state: str = ""
+        new_state: str = ""
+        has_more: bool = False
         for name, resp_args, _ in responses:
             if name == method_name:
-                _, new_sync_token, has_more, created_ids, updated_ids, destroyed = parse_changes(
+                old_state, new_state, has_more, created_ids, updated_ids, destroyed = parse_changes(
                     resp_args
                 )
-                if has_more:
-                    raise JMAPMethodError(
-                        url=api_url,
-                        reason=(
-                            f"{method_name} response was truncated by the server "
-                            f"(hasMoreChanges=true). Call {retry_hint} to obtain a "
-                            "fresh baseline and re-sync."
-                        ),
-                        error_type="serverPartialFail",
-                    )
-        return created_ids, updated_ids, destroyed, new_sync_token
+        return created_ids, updated_ids, destroyed, old_state, new_state, has_more
 
     @staticmethod
     def _parse_event_changes_response(
-        responses: list, api_url: str
-    ) -> tuple[list[str], list[str], list[str], str]:
+        responses: list,
+    ) -> tuple[list[str], list[str], list[str], str, str, bool]:
         return _JMAPClientBase._parse_changes_response(
-            responses, api_url, "CalendarEvent/changes", parse_event_changes, "get_sync_token()"
+            responses, "CalendarEvent/changes", parse_event_changes
         )
 
     @staticmethod
@@ -774,11 +795,13 @@ class _JMAPClientBase:
         created_ids: list[str],
         updated_ids: list[str],
         destroyed: list[str],
-        new_sync_token: str,
-    ) -> tuple[list, list, list[str], str]:
-        """Build ``(added, modified, deleted, new_sync_token)`` from a batched
-        ``<Type>/get`` response, keyed by id then mapped through
-        ``created_ids``/``updated_ids``.
+        old_state: str,
+        new_state: str,
+        has_more: bool,
+    ) -> tuple[list, list, list[str], str, str, bool]:
+        """Build ``(added, modified, deleted, old_state, new_state,
+        has_more_changes)`` from a batched ``<Type>/get`` response, keyed by
+        id then mapped through ``created_ids``/``updated_ids``.
 
         Shared by every ``_assemble_*_sync_token_result`` (CalendarEvent,
         Task): each one differs only in the ``/get`` method name, the item
@@ -793,7 +816,7 @@ class _JMAPClientBase:
                     items_by_id[item["id"]] = wrap_item(item)
         added = [items_by_id[i] for i in created_ids if i in items_by_id]
         modified = [items_by_id[i] for i in updated_ids if i in items_by_id]
-        return added, modified, destroyed, new_sync_token
+        return added, modified, destroyed, old_state, new_state, has_more
 
     @staticmethod
     def _assemble_sync_token_result(
@@ -801,8 +824,10 @@ class _JMAPClientBase:
         created_ids: list[str],
         updated_ids: list[str],
         destroyed: list[str],
-        new_sync_token: str,
-    ) -> tuple[list[JMAPCalendarObject], list[JMAPCalendarObject], list[str], str]:
+        old_state: str,
+        new_state: str,
+        has_more: bool,
+    ) -> tuple[list[JMAPCalendarObject], list[JMAPCalendarObject], list[str], str, str, bool]:
         return _JMAPClientBase._assemble_changes_result(
             get_responses,
             "CalendarEvent/get",
@@ -811,7 +836,9 @@ class _JMAPClientBase:
             created_ids,
             updated_ids,
             destroyed,
-            new_sync_token,
+            old_state,
+            new_state,
+            has_more,
         )
 
     @staticmethod
@@ -838,10 +865,10 @@ class _JMAPClientBase:
 
     @staticmethod
     def _parse_task_changes_response(
-        responses: list, api_url: str
-    ) -> tuple[list[str], list[str], list[str], str]:
+        responses: list,
+    ) -> tuple[list[str], list[str], list[str], str, str, bool]:
         return _JMAPClientBase._parse_changes_response(
-            responses, api_url, "Task/changes", parse_task_changes, "get_task_sync_token()"
+            responses, "Task/changes", parse_task_changes
         )
 
     @staticmethod
@@ -850,8 +877,10 @@ class _JMAPClientBase:
         created_ids: list[str],
         updated_ids: list[str],
         destroyed: list[str],
-        new_sync_token: str,
-    ) -> tuple[list[dict], list[dict], list[str], str]:
+        old_state: str,
+        new_state: str,
+        has_more: bool,
+    ) -> tuple[list[dict], list[dict], list[str], str, str, bool]:
         return _JMAPClientBase._assemble_changes_result(
             get_responses,
             "Task/get",
@@ -860,7 +889,9 @@ class _JMAPClientBase:
             created_ids,
             updated_ids,
             destroyed,
-            new_sync_token,
+            old_state,
+            new_state,
+            has_more,
         )
 
     @staticmethod
@@ -1396,19 +1427,29 @@ class JMAPClient(_JMAPClientBase):
         ical_str: str,
         account_id: str | None,
         send_scheduling_messages: bool,
+        if_in_state: str | None = None,
     ) -> str:
         session = self._get_session()
         jscal = ical_to_jscal(ical_str, calendar_id=calendar_id)
         target_account = self._resolve_account(session, account_id)
         call = build_event_set_create(
-            target_account, {"new-0": jscal}, send_scheduling_messages=send_scheduling_messages
+            target_account,
+            {"new-0": jscal},
+            send_scheduling_messages=send_scheduling_messages,
+            if_in_state=if_in_state,
         )
         responses = self._request([call])
         return self._parse_create_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set
         )
 
-    def create_event(self, calendar_id: str, ical_str: str, account_id: str | None = None) -> str:
+    def create_event(
+        self,
+        calendar_id: str,
+        ical_str: str,
+        account_id: str | None = None,
+        if_in_state: str | None = None,
+    ) -> str:
         """Create a calendar event from an iCalendar string.
 
         Args:
@@ -1417,6 +1458,13 @@ class JMAPClient(_JMAPClientBase):
             account_id: The account owning ``calendar_id``; pass the owner's
                 account here to add an event to a calendar shared with you
                 (see ``get_calendars(account_id=...)``).
+            if_in_state: A state string from a prior call that read this
+                account's calendar state. If the account has changed since,
+                the server rejects the create with ``JMAPMethodError``
+                (``error_type == "stateMismatch"``) instead of applying it
+                (:rfc:`8620#section-5.3`). The state covers every event in
+                the account, not just this one. ``None`` applies
+                unconditionally.
 
         Returns:
             The server-assigned JMAP event ID.
@@ -1428,10 +1476,20 @@ class JMAPClient(_JMAPClientBase):
                 mismatched ``DTSTART``/``DTEND`` value types).
         """
         return self._create_event_impl(
-            calendar_id, ical_str, account_id, send_scheduling_messages=False
+            calendar_id,
+            ical_str,
+            account_id,
+            send_scheduling_messages=False,
+            if_in_state=if_in_state,
         )
 
-    def send_invite(self, calendar_id: str, ical_str: str, account_id: str | None = None) -> str:
+    def send_invite(
+        self,
+        calendar_id: str,
+        ical_str: str,
+        account_id: str | None = None,
+        if_in_state: str | None = None,
+    ) -> str:
         """Create a calendar event and notify its participants.
 
         Identical to :meth:`create_event`, except the server actually
@@ -1445,6 +1503,7 @@ class JMAPClient(_JMAPClientBase):
             ical_str: A VCALENDAR string representing the event.
             account_id: The account owning ``calendar_id``, same as
                 :meth:`create_event`.
+            if_in_state: See :meth:`create_event`.
 
         Returns:
             The server-assigned JMAP event ID.
@@ -1456,7 +1515,11 @@ class JMAPClient(_JMAPClientBase):
             ValueError: Same conditions as :meth:`create_event`.
         """
         return self._create_event_impl(
-            calendar_id, ical_str, account_id, send_scheduling_messages=True
+            calendar_id,
+            ical_str,
+            account_id,
+            send_scheduling_messages=True,
+            if_in_state=if_in_state,
         )
 
     def get_event(self, event_id: str, account_id: str | None = None) -> JMAPCalendarObject:
@@ -1754,7 +1817,13 @@ class JMAPClient(_JMAPClientBase):
             event_id, own_email, PARTICIPATION_STATUS_TENTATIVE, account_id=account_id
         )
 
-    def update_event(self, event_id: str, ical_str: str, account_id: str | None = None) -> None:
+    def update_event(
+        self,
+        event_id: str,
+        ical_str: str,
+        account_id: str | None = None,
+        if_in_state: str | None = None,
+    ) -> None:
         """Update a calendar event from an iCalendar string.
 
         A property present on the server's own copy but absent from
@@ -1769,6 +1838,15 @@ class JMAPClient(_JMAPClientBase):
             account_id: The account owning ``event_id``; pass the owner's
                 account here to update an event on a calendar shared with
                 you.
+            if_in_state: A state string from a prior call that read this
+                account's calendar state. If the account has changed since,
+                the server rejects the update with ``JMAPMethodError``
+                (``error_type == "stateMismatch"``) instead of applying it
+                (:rfc:`8620#section-5.3`). The state covers every event in
+                the account, not just this one. ``None`` applies
+                unconditionally. Sent unchanged on every retry of the
+                null-key-dropping loop below, since those retries narrow the
+                same patch rather than re-reading the account's state.
 
         Raises:
             JMAPMethodError: If the server rejects the update.
@@ -1780,7 +1858,9 @@ class JMAPClient(_JMAPClientBase):
         target_account = self._resolve_account(session, account_id)
         patch, nulled = self._build_event_update_patch(ical_str)
         while True:
-            responses = self._request([build_event_set_update(target_account, {event_id: patch})])
+            responses = self._request(
+                [build_event_set_update(target_account, {event_id: patch}, if_in_state=if_in_state)]
+            )
             drop = self._unsupported_null_keys(responses, event_id, patch, nulled)
             if not drop:
                 break
@@ -1802,7 +1882,16 @@ class JMAPClient(_JMAPClientBase):
         participant_role: str | None = None,
         parent: JMAPCalendar | None = None,
         account_id: str | None = None,
-    ) -> list[JMAPCalendarObject]:
+        position: int = 0,
+        limit: int | None = None,
+        calculate_total: bool = False,
+    ) -> tuple[list[JMAPCalendarObject], int, int | None]:
+        """Return ``(events, response_position, total)``.
+
+        ``total`` is ``None`` unless ``calculate_total`` was true, regardless
+        of what the server's own response happened to include: see
+        ``build_query`` in ``_methods``.
+        """
         session = self._get_session()
         calls = self._build_event_search_calls(
             self._resolve_account(session, account_id),
@@ -1810,9 +1899,13 @@ class JMAPClient(_JMAPClientBase):
             start,
             end,
             text,
+            position,
+            limit,
+            calculate_total,
         )
         responses = self._request(calls)
         results = self._parse_search_response(responses, parent)
+        response_position, response_total = self._parse_event_query_response(responses)
         if any(
             v is not None
             for v in (has_attachment, participant_email, participation_status, participant_role)
@@ -1828,7 +1921,7 @@ class JMAPClient(_JMAPClientBase):
                     participant_role,
                 )
             ]
-        return results
+        return results, response_position, response_total if calculate_total else None
 
     def search_events(
         self,
@@ -1841,7 +1934,10 @@ class JMAPClient(_JMAPClientBase):
         participation_status: str | None = None,
         participant_role: str | None = None,
         account_id: str | None = None,
-    ) -> list[JMAPCalendarObject]:
+        position: int = 0,
+        limit: int | None = None,
+        calculate_total: bool = False,
+    ) -> EventSearchResult:
         """Search for calendar events.
 
         All parameters are optional; omitting all returns every event in the account.
@@ -1857,7 +1953,11 @@ class JMAPClient(_JMAPClientBase):
         rule, but the three participant-based filters are each satisfied
         independently across an event's participants: an event where one
         participant matches ``participant_email`` and a different
-        participant matches ``participant_role`` still matches both.
+        participant matches ``participant_role`` still matches both. Since
+        these filters run after the server-side page is fetched, ``limit``
+        caps the page the server returns, not the number of events left
+        after this client-side filtering, a page can come back smaller than
+        ``limit`` once these are applied.
 
         Cyrus drops a Link's ``rel: "enclosure"`` on read-back, confirmed
         against a running instance, so ``has_attachment=True`` misses real
@@ -1888,16 +1988,32 @@ class JMAPClient(_JMAPClientBase):
                 map has this key set to ``True``.
             account_id: Pass a different account here to search a calendar
                 shared with you.
+            position: Zero-based index of the first result to return
+                (:rfc:`8620#section-5.5`). Use with ``limit`` to page
+                through a full listing.
+            limit: Maximum number of events the server returns for this
+                page. ``None`` means no limit, letting the server return
+                everything (or whatever its own server-side cap is, which
+                this client cannot detect unless ``calculate_total`` is
+                also passed).
+            calculate_total: If true, the server includes the total number
+                of matching events in the result, letting a caller detect
+                when it's seen every page. This count is server-side only;
+                it does not account for ``has_attachment``/``participant_email``/
+                ``participation_status``/``participant_role``, which filter
+                after the server's own count is taken. See
+                :class:`~calendaring_jmap.objects.event_search_result.EventSearchResult`
+                for how ``total`` behaves when this is false.
 
         Returns:
-            List of :class:`~calendaring_jmap.objects.calendar_object.JMAPCalendarObject`
-            instances.  ``parent`` is ``None`` on these objects since no
+            An :class:`~calendaring_jmap.objects.event_search_result.EventSearchResult`.
+            Its ``events`` carry ``parent=None`` since no
             :class:`~calendaring_jmap.objects.calendar.JMAPCalendar` is available at
             the client level; use
             :meth:`~calendaring_jmap.objects.calendar.JMAPCalendar.search`
             if you need ``parent`` set.
         """
-        return self._search(
+        events, response_position, total = self._search(
             calendar_id=calendar_id,
             start=start,
             end=end,
@@ -1907,7 +2023,11 @@ class JMAPClient(_JMAPClientBase):
             participation_status=participation_status,
             participant_role=participant_role,
             account_id=account_id,
+            position=position,
+            limit=limit,
+            calculate_total=calculate_total,
         )
+        return EventSearchResult(events=events, position=response_position, total=total)
 
     def get_availability(
         self,
@@ -2256,24 +2376,31 @@ class JMAPClient(_JMAPClientBase):
             subscription_id,
         )
 
-    def get_sync_token(self) -> str:
+    def get_sync_token(self, account_id: str | None = None) -> str:
         """Return the current CalendarEvent state string for use as a sync token.
 
         Calls ``CalendarEvent/get`` with an empty ID list, so no event data
         is transferred, only the ``state`` field from the response.
+
+        Args:
+            account_id: The account to read the state of; pass a different
+                account here to sync a calendar shared with you, since a
+                JMAP state string is scoped to one account, not the whole
+                session.
 
         Returns:
             Opaque state string. Pass to :meth:`get_objects_by_sync_token` to
             retrieve only what changed since this point.
         """
         session = self._get_session()
-        responses = self._request([build_event_get(session.account_id, ids=[])])
+        target_account = self._resolve_account(session, account_id)
+        responses = self._request([build_event_get(target_account, ids=[])])
         return self._parse_get_sync_token_response(responses, session.api_url)
 
     def get_objects_by_sync_token(
-        self, sync_token: str
-    ) -> tuple[list[JMAPCalendarObject], list[JMAPCalendarObject], list[str], str]:
-        """Fetch events changed since a previous sync token.
+        self, sync_token: str, account_id: str | None = None, max_changes: int | None = None
+    ) -> tuple[list[JMAPCalendarObject], list[JMAPCalendarObject], list[str], str, str, bool]:
+        """Fetch one page of events changed since a previous sync token.
 
         Calls ``CalendarEvent/changes`` to discover which events were created,
         modified, or destroyed since ``sync_token`` was issued. Created and
@@ -2284,29 +2411,54 @@ class JMAPClient(_JMAPClientBase):
         Args:
             sync_token: A state string previously returned by :meth:`get_sync_token`
                 or by a prior call to this method.
+            account_id: The account to fetch changes for; pass a different
+                account here to sync a calendar shared with you. Must match
+                the account ``sync_token`` was issued for.
+            max_changes: Optional upper bound on the number of changes the
+                server returns in this page. The server may return fewer
+                than this regardless; ``None`` leaves the page size up to
+                the server. Passing a small value forces a large change set
+                to page across multiple calls, confirmed live against both
+                Cyrus and Stalwart to produce ``has_more_changes=True``.
 
         Returns:
-            A 4-tuple ``(added, modified, deleted, new_sync_token)``:
+            A 6-tuple ``(added, modified, deleted, old_state, new_state, has_more_changes)``:
 
             - ``added``: objects for newly created events (``parent`` is ``None``).
             - ``modified``: objects for updated events (``parent`` is ``None``).
             - ``deleted``: Event IDs that were destroyed.
-            - ``new_sync_token``: Pass to the next call to this method as ``sync_token``.
-
-        Raises:
-            JMAPMethodError: If the server reports ``hasMoreChanges: true``.
+            - ``old_state``: The ``sync_token`` argument echoed back by the
+              server. Compare this against ``sync_token`` to detect a server
+              that silently accepted an invalid or stale state instead of
+              reporting an error (:rfc:`8620#section-5.2` does not require a
+              server to validate ``sinceState`` against a real prior state;
+              confirmed live that Cyrus echoes back whatever value it was
+              given, including one that was never actually issued, rather
+              than rejecting it).
+            - ``new_state``: Pass to the next call to this method as
+              ``sync_token``, whether or not ``has_more_changes`` is set.
+              Named to match ``oldState``/``newState`` as a pair
+              (:rfc:`8620#section-5.2`), not ``sync_token``: both names
+              refer to the same kind of value, a state string previously
+              returned by this method or :meth:`get_sync_token`.
+            - ``has_more_changes``: If true, the server capped this page and
+              more changes remain; call this method again with ``new_state``
+              to fetch the next page (:rfc:`8620#section-5.2`).
         """
         session = self._get_session()
-        responses = self._request([build_event_changes(session.account_id, sync_token)])
-        created_ids, updated_ids, destroyed, new_sync_token = self._parse_event_changes_response(
-            responses, session.api_url
+        target_account = self._resolve_account(session, account_id)
+        responses = self._request(
+            [build_event_changes(target_account, sync_token, max_changes=max_changes)]
+        )
+        created_ids, updated_ids, destroyed, old_state, new_state, has_more = (
+            self._parse_event_changes_response(responses)
         )
         fetch_ids = created_ids + updated_ids
         if not fetch_ids:
-            return [], [], destroyed, new_sync_token
-        get_responses = self._request([build_event_get(session.account_id, ids=fetch_ids)])
+            return [], [], destroyed, old_state, new_state, has_more
+        get_responses = self._request([build_event_get(target_account, ids=fetch_ids)])
         return self._assemble_sync_token_result(
-            get_responses, created_ids, updated_ids, destroyed, new_sync_token
+            get_responses, created_ids, updated_ids, destroyed, old_state, new_state, has_more
         )
 
     def delete_event(
@@ -2314,6 +2466,7 @@ class JMAPClient(_JMAPClientBase):
         event_id: str,
         account_id: str | None = None,
         send_scheduling_messages: bool = False,
+        if_in_state: str | None = None,
     ) -> None:
         """Delete a calendar event.
 
@@ -2325,6 +2478,13 @@ class JMAPClient(_JMAPClientBase):
             send_scheduling_messages: If true, and this account is the
                 event's origin, the server sends an iTIP CANCEL to the
                 event's participants (draft-ietf-jmap-calendars section 5.9.2.2).
+            if_in_state: A state string from a prior call that read this
+                account's calendar state. If the account has changed since,
+                the server rejects the delete with ``JMAPMethodError``
+                (``error_type == "stateMismatch"``) instead of applying it
+                (:rfc:`8620#section-5.3`). The state covers every event in
+                the account, not just this one. ``None`` applies
+                unconditionally.
 
         Raises:
             JMAPMethodError: If the server rejects the delete.
@@ -2332,7 +2492,14 @@ class JMAPClient(_JMAPClientBase):
         session = self._get_session()
         target_account = self._resolve_account(session, account_id)
         responses = self._request(
-            [build_event_set_destroy(target_account, [event_id], send_scheduling_messages)]
+            [
+                build_event_set_destroy(
+                    target_account,
+                    [event_id],
+                    send_scheduling_messages,
+                    if_in_state=if_in_state,
+                )
+            ]
         )
         self._parse_delete_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set, event_id
@@ -2346,7 +2513,8 @@ class JMAPClient(_JMAPClientBase):
         account_id: str | None = None,
     ) -> JMAPCalendarObject:
         # RFC 8984 FilterCondition has no uid field; UID matching is done client-side.
-        for obj in self._search(calendar_id=calendar_id, parent=parent, account_id=account_id):
+        objects, _, _ = self._search(calendar_id=calendar_id, parent=parent, account_id=account_id)
+        for obj in objects:
             if obj.data.get("uid") == uid:
                 return obj
 
@@ -2443,7 +2611,7 @@ class JMAPClient(_JMAPClientBase):
         )
         self._parse_delete_response(responses, session.api_url, "Task/set", parse_task_set, task_id)
 
-    def get_task_sync_token(self) -> str:
+    def get_task_sync_token(self, account_id: str | None = None) -> str:
         """Return the current Task state string for use as a sync token.
 
         Calls ``Task/get`` with an empty ID list, so no task data is
@@ -2453,18 +2621,25 @@ class JMAPClient(_JMAPClientBase):
         :meth:`get_tasks_by_sync_token` calls ``Task/changes``, which only
         accepts a state previously returned for ``Task`` itself.
 
+        Args:
+            account_id: The account to read the state of; pass a different
+                account here to sync a task list shared with you, since a
+                JMAP state string is scoped to one account, not the whole
+                session.
+
         Returns:
             Opaque state string. Pass to :meth:`get_tasks_by_sync_token` to
             retrieve only what changed since this point.
         """
         session = self._get_session()
-        responses = self._request([build_task_get(session.account_id, ids=[])], using=_TASK_USING)
+        target_account = self._resolve_account(session, account_id)
+        responses = self._request([build_task_get(target_account, ids=[])], using=_TASK_USING)
         return self._parse_get_task_sync_token_response(responses, session.api_url)
 
     def get_tasks_by_sync_token(
-        self, sync_token: str
-    ) -> tuple[list[dict], list[dict], list[str], str]:
-        """Fetch tasks changed since a previous sync token.
+        self, sync_token: str, account_id: str | None = None, max_changes: int | None = None
+    ) -> tuple[list[dict], list[dict], list[str], str, str, bool]:
+        """Fetch one page of tasks changed since a previous sync token.
 
         Calls ``Task/changes`` to discover which tasks were created,
         modified, or destroyed since ``sync_token`` was issued. Created and
@@ -2475,33 +2650,48 @@ class JMAPClient(_JMAPClientBase):
         Args:
             sync_token: A state string previously returned by
                 :meth:`get_task_sync_token` or by a prior call to this method.
+            account_id: The account to fetch changes for; pass a different
+                account here to sync a task list shared with you. Must match
+                the account ``sync_token`` was issued for.
+            max_changes: Optional upper bound on the number of changes the
+                server returns in this page. See
+                :meth:`get_objects_by_sync_token` for the paging behavior
+                this enables.
 
         Returns:
-            A 4-tuple ``(added, modified, deleted, new_sync_token)``:
+            A 6-tuple ``(added, modified, deleted, old_state, new_state, has_more_changes)``:
 
             - ``added``: raw dicts for newly created tasks.
             - ``modified``: raw dicts for updated tasks.
             - ``deleted``: Task IDs that were destroyed.
-            - ``new_sync_token``: Pass to the next call to this method as ``sync_token``.
-
-        Raises:
-            JMAPMethodError: If the server reports ``hasMoreChanges: true``.
+            - ``old_state``: The ``sync_token`` argument echoed back by the
+              server. See :meth:`get_objects_by_sync_token` for why this is
+              worth comparing against ``sync_token`` yourself.
+            - ``new_state``: Pass to the next call to this method as
+              ``sync_token``, whether or not ``has_more_changes`` is set.
+              See :meth:`get_objects_by_sync_token` for why this is named
+              ``new_state`` rather than ``sync_token``.
+            - ``has_more_changes``: If true, the server capped this page and
+              more changes remain; call this method again with ``new_state``
+              to fetch the next page (:rfc:`8620#section-5.2`).
         """
         session = self._get_session()
+        target_account = self._resolve_account(session, account_id)
         responses = self._request(
-            [build_task_changes(session.account_id, sync_token)], using=_TASK_USING
+            [build_task_changes(target_account, sync_token, max_changes=max_changes)],
+            using=_TASK_USING,
         )
-        created_ids, updated_ids, destroyed, new_sync_token = self._parse_task_changes_response(
-            responses, session.api_url
+        created_ids, updated_ids, destroyed, old_state, new_state, has_more = (
+            self._parse_task_changes_response(responses)
         )
         fetch_ids = created_ids + updated_ids
         if not fetch_ids:
-            return [], [], destroyed, new_sync_token
+            return [], [], destroyed, old_state, new_state, has_more
         get_responses = self._request(
-            [build_task_get(session.account_id, ids=fetch_ids)], using=_TASK_USING
+            [build_task_get(target_account, ids=fetch_ids)], using=_TASK_USING
         )
         return self._assemble_task_sync_token_result(
-            get_responses, created_ids, updated_ids, destroyed, new_sync_token
+            get_responses, created_ids, updated_ids, destroyed, old_state, new_state, has_more
         )
 
     def search_tasks(

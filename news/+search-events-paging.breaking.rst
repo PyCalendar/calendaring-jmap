@@ -1,0 +1,1 @@
+``search_events`` now accepts ``position``, ``limit``, and ``calculate_total`` for paging through large result sets, and returns an ``EventSearchResult`` instead of a bare list. Use ``.events`` for the matching events.

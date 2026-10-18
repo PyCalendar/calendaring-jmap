@@ -1,0 +1,1 @@
+``get_sync_token``, ``get_objects_by_sync_token``, ``get_task_sync_token``, and ``get_tasks_by_sync_token`` now accept an optional ``account_id``, for syncing a calendar or task list shared with you instead of only your own account.

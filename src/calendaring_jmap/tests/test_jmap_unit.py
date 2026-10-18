@@ -839,7 +839,7 @@ class TestJMAPCalendar:
 
     def test_calendar_search_dispatches_to_async_when_async_backed(self):
         mock_client = MagicMock()
-        mock_client._search = AsyncMock(return_value=["result"])
+        mock_client._search = AsyncMock(return_value=(["result"], 0, None))
         cal: JMAPCalendar[Literal[True]] = JMAPCalendar(id="cal1", name="Test")
         cal._client = mock_client
         cal._is_async = True
@@ -860,7 +860,7 @@ class TestJMAPCalendar:
 
     def test_calendar_search_async_passes_through_string_dates_unconverted(self):
         mock_client = MagicMock()
-        mock_client._search = AsyncMock(return_value=[])
+        mock_client._search = AsyncMock(return_value=([], 0, None))
         cal: JMAPCalendar[Literal[True]] = JMAPCalendar(id="cal1", name="Test")
         cal._client = mock_client
         cal._is_async = True
@@ -873,7 +873,7 @@ class TestJMAPCalendar:
 
     def test_calendar_search_async_forwards_client_side_filters(self):
         mock_client = MagicMock()
-        mock_client._search = AsyncMock(return_value=[])
+        mock_client._search = AsyncMock(return_value=([], 0, None))
         cal: JMAPCalendar[Literal[True]] = JMAPCalendar(id="cal1", name="Test")
         cal._client = mock_client
         cal._is_async = True
@@ -1818,8 +1818,8 @@ class TestJMAPClientBaseParsers:
             _JMAPClientBase._parse_get_task_response([], api_url=_API_URL, task_id="t1")
 
     def test_parse_event_changes_response_without_match_returns_empty_defaults(self):
-        result = _JMAPClientBase._parse_event_changes_response([], api_url=_API_URL)
-        assert result == ([], [], [], "")
+        result = _JMAPClientBase._parse_event_changes_response([])
+        assert result == ([], [], [], "", "", False)
 
     def test_unsupported_null_keys_returns_none_without_match(self):
         assert (
@@ -1873,10 +1873,8 @@ class TestJMAPClientBaseParsers:
             _JMAPClientBase._parse_get_sync_token_response([_UNRELATED_RESPONSE], api_url=_API_URL)
 
     def test_parse_event_changes_response_skips_unrelated_responses_in_batch(self):
-        result = _JMAPClientBase._parse_event_changes_response(
-            [("Task/set", {}, "unrelated-0")], api_url=_API_URL
-        )
-        assert result == ([], [], [], "")
+        result = _JMAPClientBase._parse_event_changes_response([("Task/set", {}, "unrelated-0")])
+        assert result == ([], [], [], "", "", False)
 
     def test_parse_delete_response_skips_unrelated_responses_in_batch(self):
         for set_method, parse_set in self._SET_METHODS_BY_OBJECT.items():
@@ -1915,12 +1913,21 @@ class TestJMAPClientBaseParsers:
             "start": "2024-01-01T00:00:00",
         }
         get_response = ("CalendarEvent/get", {"list": [raw_event], "notFound": []}, "c1")
-        added, modified, deleted, token = _JMAPClientBase._assemble_sync_token_result(
-            [_UNRELATED_RESPONSE, get_response], ["ev1"], [], [], "new-state"
+        added, modified, deleted, old_state, new_state, has_more = (
+            _JMAPClientBase._assemble_sync_token_result(
+                [_UNRELATED_RESPONSE, get_response],
+                ["ev1"],
+                [],
+                [],
+                "old-state",
+                "new-state",
+                False,
+            )
         )
         assert len(added) == 1
         assert added[0].id == "ev1"
-        assert modified == [] and deleted == [] and token == "new-state"
+        assert modified == [] and deleted == []
+        assert old_state == "old-state" and new_state == "new-state" and has_more is False
 
     def test_client_del_swallows_close_exception(self):
         client = JMAPClient(url="http://x", username="u", password="p")
@@ -5476,15 +5483,25 @@ def _query_get_response(
     query_call_id: str = "ev-query-0",
     get_method: str = "CalendarEvent/get",
     get_call_id: str = "ev-get-1",
+    total: int | None = None,
+    position: int = 0,
 ) -> dict:
     """Batched [<query_method>, <get_method>] response envelope, ids derived
     from ``items``. Shared by every test that exercises a search-shaped
     call (``TestJMAPCalendar``, ``TestJMAPClientEvents``, ``TestJMAPClientContacts``
-    and its async sibling)."""
+    and its async sibling).
+
+    ``total`` defaults to ``len(items)``, matching a real server that
+    includes it unconditionally (confirmed live against Cyrus, which does
+    this regardless of whether ``calculateTotal`` was requested), so tests
+    asserting the client gates on its own ``calculate_total`` argument
+    rather than response presence have a response shaped like that server.
+    """
     query_args: dict = {
         "ids": [i["id"] for i in items],
         "queryState": "qs-1",
-        "total": len(items),
+        "position": position,
+        "total": len(items) if total is None else total,
     }
     return {
         "methodResponses": [
@@ -5757,6 +5774,62 @@ class TestJMAPClientEvents(_MockedClientMixin):
         destroy_args = captured["json"]["methodCalls"][0][1]
         assert destroy_args["sendSchedulingMessages"] is True
 
+    def test_create_event_passes_if_in_state(self, monkeypatch):
+        resp = self._set_response(created={"new-0": {"id": "sv-1"}})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.create_event("cal1", self._MINIMAL_ICAL, if_in_state="state-1")
+        create_args = captured["json"]["methodCalls"][0][1]
+        assert create_args["ifInState"] == "state-1"
+
+    def test_create_event_omits_if_in_state_when_not_passed(self, monkeypatch):
+        resp = self._set_response(created={"new-0": {"id": "sv-1"}})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.create_event("cal1", self._MINIMAL_ICAL)
+        create_args = captured["json"]["methodCalls"][0][1]
+        assert "ifInState" not in create_args
+
+    def test_create_event_raises_state_mismatch(self, monkeypatch):
+        resp = {"methodResponses": [["error", {"type": "stateMismatch"}, "ev-set-create-0"]]}
+        client = _make_client_with_mocked_session(monkeypatch, resp)
+        with pytest.raises(JMAPMethodError) as exc_info:
+            client.create_event("cal1", self._MINIMAL_ICAL, if_in_state="stale-state")
+        assert exc_info.value.error_type == "stateMismatch"
+
+    def test_update_event_passes_if_in_state(self, monkeypatch):
+        resp = self._set_response(updated={"ev1": None})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.update_event("ev1", self._MINIMAL_ICAL, if_in_state="state-1")
+        update_args = captured["json"]["methodCalls"][0][1]
+        assert update_args["ifInState"] == "state-1"
+
+    def test_update_event_omits_if_in_state_when_not_passed(self, monkeypatch):
+        resp = self._set_response(updated={"ev1": None})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.update_event("ev1", self._MINIMAL_ICAL)
+        update_args = captured["json"]["methodCalls"][0][1]
+        assert "ifInState" not in update_args
+
+    def test_delete_event_passes_if_in_state(self, monkeypatch):
+        resp = self._set_response(destroyed=["ev1"])
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.delete_event("ev1", if_in_state="state-1")
+        destroy_args = captured["json"]["methodCalls"][0][1]
+        assert destroy_args["ifInState"] == "state-1"
+
+    def test_delete_event_omits_if_in_state_when_not_passed(self, monkeypatch):
+        resp = self._set_response(destroyed=["ev1"])
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.delete_event("ev1")
+        destroy_args = captured["json"]["methodCalls"][0][1]
+        assert "ifInState" not in destroy_args
+
+    def test_send_invite_passes_if_in_state(self, monkeypatch):
+        resp = self._set_response(created={"new-0": {"id": "sv-1"}})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.send_invite("cal1", self._MINIMAL_ICAL, if_in_state="state-1")
+        create_args = captured["json"]["methodCalls"][0][1]
+        assert create_args["ifInState"] == "state-1"
+
     def test_send_invite_returns_server_id(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-1"}})
         client = _make_client_with_mocked_session(monkeypatch, resp)
@@ -5928,7 +6001,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         event2 = {**self._RAW_EVENT, "id": "ev2", "title": "Standup"}
         resp = _query_get_response([self._RAW_EVENT, event2])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events()
+        results = client.search_events().events
         assert len(results) == 2
         assert all(isinstance(r, JMAPCalendarObject) for r in results)
         assert all(r.parent is None for r in results)
@@ -5936,7 +6009,48 @@ class TestJMAPClientEvents(_MockedClientMixin):
     def test_search_events_empty_result(self, monkeypatch):
         resp = _query_get_response([])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        assert client.search_events() == []
+        assert client.search_events().events == []
+
+    def test_search_events_result_total_none_without_calculate_total(self, monkeypatch):
+        """Confirmed live: Cyrus includes total unconditionally, so this
+        must be gated on the caller's own calculate_total, not on whether
+        the mocked response happens to carry one."""
+        resp = _query_get_response([self._RAW_EVENT], total=1)
+        client = _make_client_with_mocked_session(monkeypatch, resp)
+        assert client.search_events().total is None
+
+    def test_search_events_result_total_set_with_calculate_total(self, monkeypatch):
+        resp = _query_get_response([self._RAW_EVENT], total=5)
+        client = _make_client_with_mocked_session(monkeypatch, resp)
+        result = client.search_events(calculate_total=True)
+        assert result.total == 5
+
+    def test_search_events_result_position(self, monkeypatch):
+        resp = _query_get_response([self._RAW_EVENT], position=3)
+        client = _make_client_with_mocked_session(monkeypatch, resp)
+        assert client.search_events(position=3).position == 3
+
+    def test_search_events_passes_position_and_limit(self, monkeypatch):
+        resp = _query_get_response([self._RAW_EVENT])
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.search_events(position=10, limit=5)
+        query_args = captured["json"]["methodCalls"][0][1]
+        assert query_args["position"] == 10
+        assert query_args["limit"] == 5
+
+    def test_search_events_omits_calculate_total_when_false(self, monkeypatch):
+        resp = _query_get_response([self._RAW_EVENT])
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.search_events()
+        query_args = captured["json"]["methodCalls"][0][1]
+        assert "calculateTotal" not in query_args
+
+    def test_search_events_sends_calculate_total_when_true(self, monkeypatch):
+        resp = _query_get_response([self._RAW_EVENT])
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.search_events(calculate_total=True)
+        query_args = captured["json"]["methodCalls"][0][1]
+        assert query_args["calculateTotal"] is True
 
     def test_search_events_passes_calendar_id_filter(self, monkeypatch):
         resp = _query_get_response([self._RAW_EVENT])
@@ -5972,7 +6086,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         without_link = {**self._RAW_EVENT, "id": "ev2"}
         resp = _query_get_response([with_link, without_link])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(has_attachment=True)
+        results = client.search_events(has_attachment=True).events
         assert [r.id for r in results] == [with_link["id"]]
 
     def test_search_events_has_attachment_false_keeps_non_matching(self, monkeypatch):
@@ -5980,7 +6094,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         without_link = {**self._RAW_EVENT, "id": "ev2"}
         resp = _query_get_response([with_link, without_link])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(has_attachment=False)
+        results = client.search_events(has_attachment=False).events
         assert [r.id for r in results] == [without_link["id"]]
 
     def test_search_events_has_attachment_ignores_non_enclosure_links(self, monkeypatch):
@@ -5989,20 +6103,20 @@ class TestJMAPClientEvents(_MockedClientMixin):
         event = {**self._RAW_EVENT, "links": {"l1": {"rel": "describedby"}}}
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        assert client.search_events(has_attachment=True) == []
+        assert client.search_events(has_attachment=True).events == []
 
     def test_search_events_participant_email_matches_email_field(self, monkeypatch):
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(participant_email="alice@example.com")
+        results = client.search_events(participant_email="alice@example.com").events
         assert len(results) == 1
 
     def test_search_events_participant_email_matches_case_insensitively(self, monkeypatch):
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(participant_email="ALICE@EXAMPLE.COM")
+        results = client.search_events(participant_email="ALICE@EXAMPLE.COM").events
         assert len(results) == 1
 
     def test_search_events_participant_email_falls_back_to_calendar_address(self, monkeypatch):
@@ -6014,14 +6128,14 @@ class TestJMAPClientEvents(_MockedClientMixin):
         }
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(participant_email="alice@example.com")
+        results = client.search_events(participant_email="alice@example.com").events
         assert len(results) == 1
 
     def test_search_events_participant_email_no_match(self, monkeypatch):
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        assert client.search_events(participant_email="nobody@example.com") == []
+        assert client.search_events(participant_email="nobody@example.com").events == []
 
     def test_search_events_participation_status_matches_explicit_value(self, monkeypatch):
         event = {
@@ -6030,7 +6144,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         }
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(participation_status="accepted")
+        results = client.search_events(participation_status="accepted").events
         assert len(results) == 1
 
     def test_search_events_participation_status_defaults_absent_to_needs_action(self, monkeypatch):
@@ -6040,7 +6154,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         }
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(participation_status="needs-action")
+        results = client.search_events(participation_status="needs-action").events
         assert len(results) == 1
 
     def test_search_events_participant_role_matches_true_role(self, monkeypatch):
@@ -6050,14 +6164,14 @@ class TestJMAPClientEvents(_MockedClientMixin):
         }
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(participant_role="chair")
+        results = client.search_events(participant_role="chair").events
         assert len(results) == 1
 
     def test_search_events_participant_role_no_match_when_absent(self, monkeypatch):
         event = {**self._RAW_EVENT, "participants": {"p1": {"@type": "Participant"}}}
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        assert client.search_events(participant_role="chair") == []
+        assert client.search_events(participant_role="chair").events == []
 
     def test_search_events_participant_role_no_match_when_false(self, monkeypatch):
         event = {
@@ -6066,14 +6180,16 @@ class TestJMAPClientEvents(_MockedClientMixin):
         }
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        assert client.search_events(participant_role="chair") == []
+        assert client.search_events(participant_role="chair").events == []
 
     def test_search_events_combines_client_side_filters_as_and(self, monkeypatch):
         # Passes participant_email but fails has_attachment: excluded.
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         resp = _query_get_response([event])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        results = client.search_events(participant_email="alice@example.com", has_attachment=True)
+        results = client.search_events(
+            participant_email="alice@example.com", has_attachment=True
+        ).events
         assert results == []
 
     def test_search_events_participant_filters_need_not_share_a_participant(self, monkeypatch):
@@ -6084,7 +6200,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         client = _make_client_with_mocked_session(monkeypatch, resp)
         results = client.search_events(
             participant_email="alice@example.com", participant_role="owner"
-        )
+        ).events
         assert len(results) == 1
 
     def test_search_events_no_client_side_filtering_when_all_omitted(self, monkeypatch):
@@ -6092,7 +6208,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         # skipped entirely, not just a no-op pass on every result.
         resp = _query_get_response([self._RAW_EVENT])
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        assert len(client.search_events()) == 1
+        assert len(client.search_events().events) == 1
 
 
 class _MockedBlobClientMixin:
@@ -7109,18 +7225,45 @@ class TestJMAPClientSync(_MockedClientMixin):
         client.get_sync_token()
         assert captured["json"]["methodCalls"][0][1]["ids"] == []
 
+    def test_get_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = self._get_resp_with_state([])
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.get_sync_token(account_id="owner-account")
+        assert captured["json"]["methodCalls"][0][1]["accountId"] == "owner-account"
+
+    def test_get_objects_by_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = self._changes_resp()
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.get_objects_by_sync_token("state-1", account_id="owner-account")
+        assert captured["json"]["methodCalls"][0][1]["accountId"] == "owner-account"
+
+    def test_get_objects_by_sync_token_passes_max_changes(self, monkeypatch):
+        resp = self._changes_resp()
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.get_objects_by_sync_token("state-1", max_changes=50)
+        assert captured["json"]["methodCalls"][0][1]["maxChanges"] == 50
+
+    def test_get_objects_by_sync_token_omits_max_changes_when_not_passed(self, monkeypatch):
+        resp = self._changes_resp()
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.get_objects_by_sync_token("state-1")
+        assert "maxChanges" not in captured["json"]["methodCalls"][0][1]
+
     def test_get_objects_no_changes(self):
         resp = self._changes_resp()
         client = self._make_client()
         self._mock_http(client, self._make_mock(resp))
-        added, modified, deleted, _ = client.get_objects_by_sync_token("state-1")
+        added, modified, deleted, old_state, new_state, has_more = client.get_objects_by_sync_token(
+            "state-1"
+        )
         assert added == [] and modified == [] and deleted == []
+        assert old_state == "state-1" and new_state == "state-2" and has_more is False
 
     def test_get_objects_deleted_returns_ids(self):
         resp = self._changes_resp(destroyed=["ev1"])
         client = self._make_client()
         self._mock_http(client, self._make_mock(resp))
-        added, modified, deleted, _ = client.get_objects_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = client.get_objects_by_sync_token("state-1")
         assert deleted == ["ev1"] and added == [] and modified == []
 
     def test_get_objects_added_returns_ical(self):
@@ -7131,7 +7274,7 @@ class TestJMAPClientSync(_MockedClientMixin):
             client,
             side_effect=[self._make_mock(changes_resp), self._make_mock(get_resp)],
         )
-        added, modified, deleted, _ = client.get_objects_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = client.get_objects_by_sync_token("state-1")
         assert len(added) == 1
         assert isinstance(added[0], JMAPCalendarObject)
         assert added[0].id == "ev1"
@@ -7145,21 +7288,30 @@ class TestJMAPClientSync(_MockedClientMixin):
             client,
             side_effect=[self._make_mock(changes_resp), self._make_mock(get_resp)],
         )
-        added, modified, deleted, _ = client.get_objects_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = client.get_objects_by_sync_token("state-1")
         assert len(modified) == 1
         assert isinstance(modified[0], JMAPCalendarObject)
         assert modified[0].id == "ev1"
         assert added == [] and deleted == []
 
-    def test_get_objects_has_more_raises(self):
-        resp = self._changes_resp(created=["ev1"], has_more=True)
+    def test_get_objects_has_more_does_not_raise(self):
+        """RFC 8620 section 5.2: hasMoreChanges is normal paging, not an
+        error. The caller decides whether to call again with new_state."""
+        changes_resp = self._changes_resp(created=["ev1"], has_more=True)
+        get_resp = self._get_resp_with_state([self._RAW_EVENT])
         client = self._make_client()
-        self._mock_http(client, self._make_mock(resp))
-        with pytest.raises(JMAPMethodError) as exc_info:
-            client.get_objects_by_sync_token("state-1")
-        assert exc_info.value.error_type == "serverPartialFail"
+        self._mock_http(
+            client,
+            side_effect=[self._make_mock(changes_resp), self._make_mock(get_resp)],
+        )
+        added, modified, deleted, old_state, new_state, has_more = client.get_objects_by_sync_token(
+            "state-1"
+        )
+        assert has_more is True
+        assert len(added) == 1 and added[0].id == "ev1"
+        assert old_state == "state-1" and new_state == "state-2"
 
-    def test_get_objects_returns_new_sync_token(self):
+    def test_get_objects_returns_new_state(self):
         """Gate finding 4.7: newState from /changes was discarded into _.
         Callers had no way to chain sync calls without a separate
         get_sync_token() round-trip, creating a race window where
@@ -7168,10 +7320,25 @@ class TestJMAPClientSync(_MockedClientMixin):
         client = self._make_client()
         self._mock_http(client, self._make_mock(resp))
         result = client.get_objects_by_sync_token("state-1")
-        assert len(result) == 4, "expected 4-tuple (added, modified, deleted, new_sync_token)"
-        added, modified, deleted, new_token = result
-        assert new_token == "state-99"
+        assert len(result) == 6, (
+            "expected 6-tuple (added, modified, deleted, old_state, new_state, has_more_changes)"
+        )
+        added, modified, deleted, old_state, new_state, has_more = result
+        assert new_state == "state-99"
+        assert old_state == "state-1"
+        assert has_more is False
         assert added == [] and modified == [] and deleted == []
+
+    def test_get_objects_old_state_reveals_server_accepting_invalid_state(self):
+        """Confirmed live against Cyrus: a sinceState it never issued is
+        echoed back verbatim in oldState with an empty changes list,
+        rather than erroring. A caller comparing old_state against the
+        sync_token it sent is how this gets detected."""
+        resp = self._changes_resp(old_state="bogus-never-issued", new_state="state-2")
+        client = self._make_client()
+        self._mock_http(client, self._make_mock(resp))
+        _, _, _, old_state, _, _ = client.get_objects_by_sync_token("bogus-never-issued")
+        assert old_state == "bogus-never-issued"
 
     def test_parse_event_changes_all_fields(self):
         resp_args = {
@@ -7392,18 +7559,33 @@ class TestJMAPClientTasks(_MockedClientMixin):
         client.get_task_sync_token()
         assert captured["json"]["methodCalls"][0][1]["ids"] == []
 
+    def test_get_task_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = self._task_resp_with_state()
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.get_task_sync_token(account_id="owner-account")
+        assert captured["json"]["methodCalls"][0][1]["accountId"] == "owner-account"
+
+    def test_get_tasks_by_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = self._task_changes_resp()
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.get_tasks_by_sync_token("state-1", account_id="owner-account")
+        assert captured["json"]["methodCalls"][0][1]["accountId"] == "owner-account"
+
     def test_get_tasks_no_changes(self):
         resp = self._task_changes_resp()
         client = self._make_client()
         self._mock_http(client, self._make_mock(resp))
-        added, modified, deleted, _ = client.get_tasks_by_sync_token("state-1")
+        added, modified, deleted, old_state, new_state, has_more = client.get_tasks_by_sync_token(
+            "state-1"
+        )
         assert added == [] and modified == [] and deleted == []
+        assert old_state == "state-1" and new_state == "state-2" and has_more is False
 
     def test_get_tasks_deleted_returns_ids(self):
         resp = self._task_changes_resp(destroyed=["task1"])
         client = self._make_client()
         self._mock_http(client, self._make_mock(resp))
-        added, modified, deleted, _ = client.get_tasks_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = client.get_tasks_by_sync_token("state-1")
         assert deleted == ["task1"] and added == [] and modified == []
 
     def test_get_tasks_added_returns_dicts(self):
@@ -7414,7 +7596,7 @@ class TestJMAPClientTasks(_MockedClientMixin):
             client,
             side_effect=[self._make_mock(changes_resp), self._make_mock(get_resp)],
         )
-        added, modified, deleted, _ = client.get_tasks_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = client.get_tasks_by_sync_token("state-1")
         assert len(added) == 1
         assert isinstance(added[0], dict)
         assert added[0]["id"] == "task1"
@@ -7428,19 +7610,28 @@ class TestJMAPClientTasks(_MockedClientMixin):
             client,
             side_effect=[self._make_mock(changes_resp), self._make_mock(get_resp)],
         )
-        added, modified, deleted, _ = client.get_tasks_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = client.get_tasks_by_sync_token("state-1")
         assert len(modified) == 1
         assert isinstance(modified[0], dict)
         assert modified[0]["id"] == "task1"
         assert added == [] and deleted == []
 
-    def test_get_tasks_has_more_raises(self):
-        resp = self._task_changes_resp(created=["task1"], has_more=True)
+    def test_get_tasks_has_more_does_not_raise(self):
+        """RFC 8620 section 5.2: hasMoreChanges is normal paging, not an
+        error. The caller decides whether to call again with new_state."""
+        changes_resp = self._task_changes_resp(created=["task1"], has_more=True)
+        get_resp = self._get_response([self._MINIMAL_TASK])
         client = self._make_client()
-        self._mock_http(client, self._make_mock(resp))
-        with pytest.raises(JMAPMethodError) as exc_info:
-            client.get_tasks_by_sync_token("state-1")
-        assert exc_info.value.error_type == "serverPartialFail"
+        self._mock_http(
+            client,
+            side_effect=[self._make_mock(changes_resp), self._make_mock(get_resp)],
+        )
+        added, modified, deleted, old_state, new_state, has_more = client.get_tasks_by_sync_token(
+            "state-1"
+        )
+        assert has_more is True
+        assert len(added) == 1 and added[0]["id"] == "task1"
+        assert old_state == "state-1" and new_state == "state-2"
 
     def _task_query_response(self, items):
         return _query_get_response(
@@ -7808,8 +7999,8 @@ class TestAsyncJMAPClient:
     def _event_get_resp(self, items):
         return _get_response("CalendarEvent/get", "ev-get-0", items)
 
-    def _query_get_resp(self, items):
-        return _query_get_response(items)
+    def _query_get_resp(self, items, total=None, position=0):
+        return _query_get_response(items, total=total, position=position)
 
     def _changes_resp(self, created=None, updated=None, destroyed=None, has_more=False):
         return _changes_response(
@@ -8062,6 +8253,66 @@ class TestAsyncJMAPClient:
         await self._make_client().delete_event("ev-async-1", send_scheduling_messages=True)
         destroy_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
         assert destroy_args["sendSchedulingMessages"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_event_passes_if_in_state(self, monkeypatch):
+        resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().update_event(
+            "ev-async-1", self._MINIMAL_ICAL, if_in_state="state-1"
+        )
+        update_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert update_args["ifInState"] == "state-1"
+
+    @pytest.mark.asyncio
+    async def test_update_event_omits_if_in_state_when_not_passed(self, monkeypatch):
+        resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().update_event("ev-async-1", self._MINIMAL_ICAL)
+        update_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert "ifInState" not in update_args
+
+    @pytest.mark.asyncio
+    async def test_delete_event_passes_if_in_state(self, monkeypatch):
+        resp = self._event_set_resp(destroyed=["ev-async-1"], notDestroyed={})
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().delete_event("ev-async-1", if_in_state="state-1")
+        destroy_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert destroy_args["ifInState"] == "state-1"
+
+    @pytest.mark.asyncio
+    async def test_delete_event_omits_if_in_state_when_not_passed(self, monkeypatch):
+        resp = self._event_set_resp(destroyed=["ev-async-1"], notDestroyed={})
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().delete_event("ev-async-1")
+        destroy_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert "ifInState" not in destroy_args
+
+    @pytest.mark.asyncio
+    async def test_create_event_omits_if_in_state_when_not_passed(self, monkeypatch):
+        resp = self._event_set_resp(created={"new-0": {"id": "sv-1"}})
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().create_event("cal1", self._MINIMAL_ICAL)
+        create_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert "ifInState" not in create_args
+
+    @pytest.mark.asyncio
+    async def test_send_invite_passes_if_in_state(self, monkeypatch):
+        resp = self._event_set_resp(created={"new-0": {"id": "sv-1"}})
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().send_invite("cal1", self._MINIMAL_ICAL, if_in_state="state-1")
+        create_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert create_args["ifInState"] == "state-1"
+
+    @pytest.mark.asyncio
+    async def test_create_event_raises_state_mismatch(self, monkeypatch):
+        resp = {"methodResponses": [["error", {"type": "stateMismatch"}, "ev-set-create-0"]]}
+        self._patch_async_session(monkeypatch, resp)
+        with pytest.raises(JMAPMethodError) as exc_info:
+            await self._make_client().create_event(
+                "cal1", self._MINIMAL_ICAL, if_in_state="stale-state"
+            )
+        assert exc_info.value.error_type == "stateMismatch"
 
     @pytest.mark.asyncio
     async def test_delete_event_raises_on_failure(self, monkeypatch):
@@ -8404,7 +8655,7 @@ class TestAsyncJMAPClient:
     async def test_search_events_returns_ical_list(self, monkeypatch):
         event2 = {**self._RAW_EVENT, "id": "ev-async-2", "title": "Another"}
         self._patch_async_session(monkeypatch, self._query_get_resp([self._RAW_EVENT, event2]))
-        results = await self._make_client().search_events()
+        results = (await self._make_client().search_events()).events
         assert len(results) == 2
         assert all(isinstance(r, JMAPCalendarObject) for r in results)
         assert all(r.parent is None for r in results)
@@ -8412,7 +8663,7 @@ class TestAsyncJMAPClient:
     @pytest.mark.asyncio
     async def test_search_events_empty_result(self, monkeypatch):
         self._patch_async_session(monkeypatch, self._query_get_resp([]))
-        assert await self._make_client().search_events() == []
+        assert (await self._make_client().search_events()).events == []
 
     @pytest.mark.asyncio
     async def test_get_sync_token_returns_state(self, monkeypatch):
@@ -8422,13 +8673,31 @@ class TestAsyncJMAPClient:
         assert token == "tok-async-1"
 
     @pytest.mark.asyncio
+    async def test_get_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = _get_response("CalendarEvent/get", "ev-get-0", [], state="tok-async-1")
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().get_sync_token(account_id="owner-account")
+        get_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert get_args["accountId"] == "owner-account"
+
+    @pytest.mark.asyncio
+    async def test_get_objects_by_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = self._changes_resp()
+        mock_http = self._patch_async_session(monkeypatch, resp)
+        await self._make_client().get_objects_by_sync_token("state-1", account_id="owner-account")
+        changes_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
+        assert changes_args["accountId"] == "owner-account"
+
+    @pytest.mark.asyncio
     async def test_get_objects_no_changes(self, monkeypatch):
         mock_http = MagicMock()
         mock_http.__aenter__ = AsyncMock(return_value=mock_http)
         mock_http.__aexit__ = AsyncMock(return_value=None)
         mock_http.post = AsyncMock(return_value=self._make_mock_response(self._changes_resp()))
         monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
-        added, modified, deleted, _ = await self._make_client().get_objects_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_objects_by_sync_token(
+            "state-1"
+        )
         assert added == [] and modified == [] and deleted == []
 
     @pytest.mark.asyncio
@@ -8440,7 +8709,9 @@ class TestAsyncJMAPClient:
             return_value=self._make_mock_response(self._changes_resp(destroyed=["ev1"]))
         )
         monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
-        added, modified, deleted, _ = await self._make_client().get_objects_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_objects_by_sync_token(
+            "state-1"
+        )
         assert deleted == ["ev1"] and added == [] and modified == []
 
     @pytest.mark.asyncio
@@ -8455,7 +8726,9 @@ class TestAsyncJMAPClient:
             ]
         )
         monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
-        added, modified, deleted, _ = await self._make_client().get_objects_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_objects_by_sync_token(
+            "state-1"
+        )
         assert len(added) == 1
         assert isinstance(added[0], JMAPCalendarObject)
         assert added[0].id == "ev-async-1"
@@ -8581,15 +8854,33 @@ class TestAsyncJMAPClient:
         assert captured["json"]["methodCalls"][0][1]["ids"] == []
 
     @pytest.mark.asyncio
+    async def test_get_task_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = self._task_get_resp([])
+        client, captured = self._capturing_async_session(monkeypatch, resp)
+        await client.get_task_sync_token(account_id="owner-account")
+        assert captured["json"]["methodCalls"][0][1]["accountId"] == "owner-account"
+
+    @pytest.mark.asyncio
+    async def test_get_tasks_by_sync_token_uses_given_account_id(self, monkeypatch):
+        resp = self._task_changes_resp()
+        client, captured = self._capturing_async_session(monkeypatch, resp)
+        await client.get_tasks_by_sync_token("state-1", account_id="owner-account")
+        assert captured["json"]["methodCalls"][0][1]["accountId"] == "owner-account"
+
+    @pytest.mark.asyncio
     async def test_get_tasks_no_changes(self, monkeypatch):
         self._patch_async_session(monkeypatch, self._task_changes_resp())
-        added, modified, deleted, _ = await self._make_client().get_tasks_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_tasks_by_sync_token(
+            "state-1"
+        )
         assert added == [] and modified == [] and deleted == []
 
     @pytest.mark.asyncio
     async def test_get_tasks_deleted_returns_ids(self, monkeypatch):
         self._patch_async_session(monkeypatch, self._task_changes_resp(destroyed=["task1"]))
-        added, modified, deleted, _ = await self._make_client().get_tasks_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_tasks_by_sync_token(
+            "state-1"
+        )
         assert deleted == ["task1"] and added == [] and modified == []
 
     @pytest.mark.asyncio
@@ -8604,7 +8895,9 @@ class TestAsyncJMAPClient:
             ]
         )
         monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
-        added, modified, deleted, _ = await self._make_client().get_tasks_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_tasks_by_sync_token(
+            "state-1"
+        )
         assert len(added) == 1
         assert isinstance(added[0], dict)
         assert added[0]["id"] == "task-async-1"
@@ -8622,19 +8915,38 @@ class TestAsyncJMAPClient:
             ]
         )
         monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
-        added, modified, deleted, _ = await self._make_client().get_tasks_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_tasks_by_sync_token(
+            "state-1"
+        )
         assert len(modified) == 1
         assert isinstance(modified[0], dict)
         assert modified[0]["id"] == "task-async-1"
         assert added == [] and deleted == []
 
     @pytest.mark.asyncio
-    async def test_get_tasks_has_more_raises(self, monkeypatch):
-        resp = self._task_changes_resp(created=["task-async-1"], has_more=True)
-        self._patch_async_session(monkeypatch, resp)
-        with pytest.raises(JMAPMethodError) as exc_info:
-            await self._make_client().get_tasks_by_sync_token("state-1")
-        assert exc_info.value.error_type == "serverPartialFail"
+    async def test_get_tasks_has_more_does_not_raise(self, monkeypatch):
+        mock_http = MagicMock()
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        mock_http.post = AsyncMock(
+            side_effect=[
+                self._make_mock_response(
+                    self._task_changes_resp(created=["task-async-1"], has_more=True)
+                ),
+                self._make_mock_response(self._task_get_resp([self._MINIMAL_TASK])),
+            ]
+        )
+        monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
+        (
+            added,
+            modified,
+            deleted,
+            old_state,
+            new_state,
+            has_more,
+        ) = await self._make_client().get_tasks_by_sync_token("state-1")
+        assert has_more is True
+        assert len(added) == 1 and added[0]["id"] == "task-async-1"
 
     @pytest.mark.asyncio
     async def test_search_tasks_sends_text_server_side(self, monkeypatch):
@@ -8866,12 +9178,52 @@ class TestAsyncJMAPClient:
         assert "filter" not in query_args
 
     @pytest.mark.asyncio
+    async def test_search_events_passes_position_and_limit(self, monkeypatch):
+        client, captured = self._capturing_async_session(
+            monkeypatch, self._query_get_resp([self._RAW_EVENT])
+        )
+        await client.search_events(position=10, limit=5)
+        query_args = captured["json"]["methodCalls"][0][1]
+        assert query_args["position"] == 10
+        assert query_args["limit"] == 5
+
+    @pytest.mark.asyncio
+    async def test_search_events_omits_calculate_total_when_false(self, monkeypatch):
+        client, captured = self._capturing_async_session(
+            monkeypatch, self._query_get_resp([self._RAW_EVENT])
+        )
+        await client.search_events()
+        query_args = captured["json"]["methodCalls"][0][1]
+        assert "calculateTotal" not in query_args
+
+    @pytest.mark.asyncio
+    async def test_search_events_result_total_none_without_calculate_total(self, monkeypatch):
+        """Confirmed live: Cyrus includes total unconditionally, so this
+        must be gated on the caller's own calculate_total, not on whether
+        the mocked response happens to carry one."""
+        self._patch_async_session(monkeypatch, self._query_get_resp([self._RAW_EVENT], total=1))
+        result = await self._make_client().search_events()
+        assert result.total is None
+
+    @pytest.mark.asyncio
+    async def test_search_events_result_total_set_with_calculate_total(self, monkeypatch):
+        self._patch_async_session(monkeypatch, self._query_get_resp([self._RAW_EVENT], total=5))
+        result = await self._make_client().search_events(calculate_total=True)
+        assert result.total == 5
+
+    @pytest.mark.asyncio
+    async def test_search_events_result_position(self, monkeypatch):
+        self._patch_async_session(monkeypatch, self._query_get_resp([self._RAW_EVENT], position=3))
+        result = await self._make_client().search_events(position=3)
+        assert result.position == 3
+
+    @pytest.mark.asyncio
     async def test_search_events_has_attachment_true_keeps_matching(self, monkeypatch):
         with_link = {**self._RAW_EVENT, "links": {"l1": {"rel": "enclosure"}}}
         without_link = {**self._RAW_EVENT, "id": "ev-async-2"}
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([with_link, without_link]))
-        results = await client.search_events(has_attachment=True)
+        results = (await client.search_events(has_attachment=True)).events
         assert [r.id for r in results] == [with_link["id"]]
 
     @pytest.mark.asyncio
@@ -8880,7 +9232,7 @@ class TestAsyncJMAPClient:
         without_link = {**self._RAW_EVENT, "id": "ev-async-2"}
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([with_link, without_link]))
-        results = await client.search_events(has_attachment=False)
+        results = (await client.search_events(has_attachment=False)).events
         assert [r.id for r in results] == [without_link["id"]]
 
     @pytest.mark.asyncio
@@ -8888,14 +9240,14 @@ class TestAsyncJMAPClient:
         event = {**self._RAW_EVENT, "links": {"l1": {"rel": "describedby"}}}
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        assert await client.search_events(has_attachment=True) == []
+        assert (await client.search_events(has_attachment=True)).events == []
 
     @pytest.mark.asyncio
     async def test_search_events_participant_email_matches_email_field(self, monkeypatch):
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(participant_email="alice@example.com")
+        results = (await client.search_events(participant_email="alice@example.com")).events
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -8903,7 +9255,7 @@ class TestAsyncJMAPClient:
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(participant_email="ALICE@EXAMPLE.COM")
+        results = (await client.search_events(participant_email="ALICE@EXAMPLE.COM")).events
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -8918,7 +9270,7 @@ class TestAsyncJMAPClient:
         }
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(participant_email="alice@example.com")
+        results = (await client.search_events(participant_email="alice@example.com")).events
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -8926,7 +9278,7 @@ class TestAsyncJMAPClient:
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        assert await client.search_events(participant_email="nobody@example.com") == []
+        assert (await client.search_events(participant_email="nobody@example.com")).events == []
 
     @pytest.mark.asyncio
     async def test_search_events_participation_status_matches_explicit_value(self, monkeypatch):
@@ -8936,7 +9288,7 @@ class TestAsyncJMAPClient:
         }
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(participation_status="accepted")
+        results = (await client.search_events(participation_status="accepted")).events
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -8949,7 +9301,7 @@ class TestAsyncJMAPClient:
         }
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(participation_status="needs-action")
+        results = (await client.search_events(participation_status="needs-action")).events
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -8960,7 +9312,7 @@ class TestAsyncJMAPClient:
         }
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(participant_role="chair")
+        results = (await client.search_events(participant_role="chair")).events
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -8968,7 +9320,7 @@ class TestAsyncJMAPClient:
         event = {**self._RAW_EVENT, "participants": {"p1": {"@type": "Participant"}}}
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        assert await client.search_events(participant_role="chair") == []
+        assert (await client.search_events(participant_role="chair")).events == []
 
     @pytest.mark.asyncio
     async def test_search_events_participant_role_no_match_when_false(self, monkeypatch):
@@ -8978,16 +9330,16 @@ class TestAsyncJMAPClient:
         }
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        assert await client.search_events(participant_role="chair") == []
+        assert (await client.search_events(participant_role="chair")).events == []
 
     @pytest.mark.asyncio
     async def test_search_events_combines_client_side_filters_as_and(self, monkeypatch):
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(
-            participant_email="alice@example.com", has_attachment=True
-        )
+        results = (
+            await client.search_events(participant_email="alice@example.com", has_attachment=True)
+        ).events
         assert results == []
 
     @pytest.mark.asyncio
@@ -8997,16 +9349,18 @@ class TestAsyncJMAPClient:
         event = _participant_event(self._RAW_EVENT, own_email="alice@example.com")
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([event]))
-        results = await client.search_events(
-            participant_email="alice@example.com", participant_role="owner"
-        )
+        results = (
+            await client.search_events(
+                participant_email="alice@example.com", participant_role="owner"
+            )
+        ).events
         assert len(results) == 1
 
     @pytest.mark.asyncio
     async def test_search_events_no_client_side_filtering_when_all_omitted(self, monkeypatch):
         client = self._make_client()
         self._patch_async_session(monkeypatch, self._query_get_resp([self._RAW_EVENT]))
-        assert len(await client.search_events()) == 1
+        assert len((await client.search_events()).events) == 1
 
     _PRINCIPALS_CAPS = {"urn:ietf:params:jmap:principals": {"currentUserPrincipalId": "user1"}}
 
@@ -9587,7 +9941,9 @@ class TestAsyncJMAPClient:
             ]
         )
         monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
-        added, modified, deleted, _ = await self._make_client().get_objects_by_sync_token("state-1")
+        added, modified, deleted, _, _, _ = await self._make_client().get_objects_by_sync_token(
+            "state-1"
+        )
         assert len(modified) == 1
         assert isinstance(modified[0], JMAPCalendarObject)
         assert modified[0].id == "ev-async-1"

@@ -1,0 +1,1 @@
+``get_objects_by_sync_token`` and ``get_tasks_by_sync_token`` now return a 6-tuple ``(added, modified, deleted, old_state, new_state, has_more_changes)`` instead of a 4-tuple, and no longer raise when the server truncates a page (``hasMoreChanges: true``). Call the method again with ``new_state`` to fetch the next page.

@@ -210,6 +210,13 @@ class JMAPCalendar(Generic[_M]):
           ``participation_status`` (str), ``participant_role`` (str): see
           :meth:`~calendaring_jmap.client.JMAPClient.search_events`.
 
+        Does not support ``position``/``limit``/``calculate_total``: unlike
+        :meth:`~calendaring_jmap.client.JMAPClient.search_events`, this
+        always returns every matching object in one call. Passing them is
+        silently ignored rather than an error, since this accepts
+        ``**searchargs``; use ``search_events`` directly instead if you need
+        to page through a large result set.
+
         Returns:
             List of :class:`~calendaring_jmap.objects.calendar_object.JMAPCalendarObject`
             for all matching objects.
@@ -217,7 +224,7 @@ class JMAPCalendar(Generic[_M]):
         if self._is_async:
             return self._async_search(**searchargs)
         start, end = self._normalize_search_range(searchargs)
-        return self._bound_client._search(
+        events, _, _ = self._bound_client._search(
             calendar_id=self.id,
             start=start,
             end=end,
@@ -229,12 +236,13 @@ class JMAPCalendar(Generic[_M]):
             parent=self,
             account_id=self._account_id,
         )
+        return events
 
     async def _async_search(
         self: JMAPCalendar[Literal[True]], **searchargs: Any
     ) -> list[JMAPCalendarObject]:
         start, end = self._normalize_search_range(searchargs)
-        return await self._bound_async_client._search(
+        events, _, _ = await self._bound_async_client._search(
             calendar_id=self.id,
             start=start,
             end=end,
@@ -246,6 +254,7 @@ class JMAPCalendar(Generic[_M]):
             parent=self,
             account_id=self._account_id,
         )
+        return events
 
     @overload
     def get_object_by_uid(
