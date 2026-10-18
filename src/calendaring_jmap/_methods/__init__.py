@@ -41,6 +41,7 @@ def build_query(
     sort: list[dict] | None = None,
     position: int = 0,
     limit: int | None = None,
+    calculate_total: bool = False,
 ) -> tuple:
     """Build a ``<Object>/query`` method call tuple.
 
@@ -61,6 +62,14 @@ def build_query(
             ordering.
         position: Zero-based index of the first result to return.
         limit: Maximum number of IDs to return. ``None`` means no limit.
+        calculate_total: If true, asks the server to include the total
+            number of matching results in its response
+            (RFC 8620 section 5.5). Omitted from the request entirely
+            when false, matching the spec's own default, rather than sent
+            as an explicit ``false``: confirmed live that Cyrus includes a
+            ``total`` in its response either way, so a caller reading the
+            response must still gate on its own ``calculate_total`` value,
+            not on whether ``total`` happens to be present.
 
     Returns:
         A 3-tuple ``(method, arguments_dict, call_id)``.
@@ -72,6 +81,8 @@ def build_query(
         args["sort"] = sort
     if limit is not None:
         args["limit"] = limit
+    if calculate_total:
+        args["calculateTotal"] = calculate_total
     return (method, args, call_id)
 
 

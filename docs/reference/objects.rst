@@ -24,4 +24,7 @@ The data objects calendaring-jmap's methods return: calendars, calendar events, 
 .. automodule:: calendaring_jmap.objects.contact
    :members:
 
+.. automodule:: calendaring_jmap.objects.event_search_result
+   :members:
+
 See :doc:`errors` for the exception hierarchy.

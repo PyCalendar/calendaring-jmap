@@ -556,7 +556,7 @@ class TestJMAPCalendarManagementIntegration:
             event_id = shared.add_event(_minimal_ical("Written By Sharee"))
             assert event_id
 
-            owner_events = calendar_management_client.search_events(calendar_id=cal_id)
+            owner_events = calendar_management_client.search_events(calendar_id=cal_id).events
             assert any(obj.id == event_id for obj in owner_events), (
                 f"{server}: event created via the shared calendar object was not visible "
                 f"in the owner's own account; add_event() likely targeted the wrong account."
@@ -825,6 +825,22 @@ def event_created_id(request, server):
     return request.getfixturevalue("created_event_id" if server == "cyrus" else "stalwart_event_id")
 
 
+def _stale_state_after_bystander_write(
+    event_client: JMAPClient, calendar_id: str, bystander_title: str
+) -> tuple[str, str]:
+    """Return a sync token that's already behind the account's current
+    state, plus the id of the unrelated event created to make it stale.
+
+    Shared by every ``if_in_state``/stateMismatch test: the token returned
+    by ``get_sync_token()`` is only stale once something else has changed
+    the account since, so each test needs one extra write to advance past
+    it, not just the one it's actually testing.
+    """
+    stale_state = event_client.get_sync_token()
+    other_event_id = event_client.create_event(calendar_id, _minimal_ical(bystander_title))
+    return stale_state, other_event_id
+
+
 @_sync_servers
 class TestJMAPEventIntegration:
     def test_event_create_get(self, event_client, event_created_id):
@@ -852,24 +868,145 @@ class TestJMAPEventIntegration:
                 calendar_id=event_calendar_id,
                 start="2026-06-01T00:00:00",
                 end="2026-06-02T00:00:00",
-            )
+            ).events
             assert len(results) >= 1
             assert any(title in jscal_to_ical(r.get_data()) for r in results)
         finally:
             event_client.delete_event(event_id)
 
-    def test_event_sync(self, server, event_client, event_calendar_id):
-        if server == "stalwart":
-            pytest.skip("Stalwart integration coverage does not include sync yet")
+    def test_event_sync(self, event_client, event_calendar_id):
         token_before = event_client.get_sync_token()
         event_id = event_client.create_event(event_calendar_id, _minimal_ical("Sync Test Event"))
         try:
-            added, _modified, _deleted, _new_token = event_client.get_objects_by_sync_token(
-                token_before
+            added, _modified, _deleted, old_state, _new_state, _has_more = (
+                event_client.get_objects_by_sync_token(token_before)
             )
+            assert old_state == token_before
             assert any("Sync Test Event" in jscal_to_ical(a.get_data()) for a in added)
         finally:
             event_client.delete_event(event_id)
+
+    def test_get_sync_token_uses_given_account_id(self, event_client, server):
+        """account_id is additive on get_sync_token/get_objects_by_sync_token;
+        passing the session's own account explicitly must behave identically
+        to the default (session.account_id), confirmed against a real server
+        rather than only asserting the request shape, as the unit tests do."""
+        session_account_id = event_client._get_session().account_id
+        assert event_client.get_sync_token(account_id=session_account_id)
+
+    def test_get_objects_by_sync_token_uses_given_account_id(self, event_client, event_calendar_id):
+        session_account_id = event_client._get_session().account_id
+        token_before = event_client.get_sync_token(account_id=session_account_id)
+        event_id = event_client.create_event(
+            event_calendar_id, _minimal_ical("Account Scoped Sync Test Event")
+        )
+        try:
+            added, _modified, _deleted, old_state, _new_state, _has_more = (
+                event_client.get_objects_by_sync_token(token_before, account_id=session_account_id)
+            )
+            assert old_state == token_before
+            assert any(
+                "Account Scoped Sync Test Event" in jscal_to_ical(a.get_data()) for a in added
+            )
+        finally:
+            event_client.delete_event(event_id)
+
+    def test_update_event_with_correct_if_in_state_succeeds(self, event_client, event_calendar_id):
+        event_id = event_client.create_event(
+            event_calendar_id, _minimal_ical("ifInState Success Test Event")
+        )
+        try:
+            current_state = event_client.get_sync_token()
+            event_client.update_event(
+                event_id,
+                _minimal_ical("ifInState Success Test Event Updated"),
+                if_in_state=current_state,
+            )
+            updated = jscal_to_ical(event_client.get_event(event_id).get_data())
+            assert "ifInState Success Test Event Updated" in updated
+        finally:
+            event_client.delete_event(event_id)
+
+    def test_update_event_with_stale_if_in_state_raises_state_mismatch(
+        self, event_client, event_calendar_id
+    ):
+        """RFC 8620 section 5.3: an ifInState that no longer matches the
+        account's current state aborts the whole call with stateMismatch,
+        confirmed here against a real server rather than only a mocked
+        response, since this is the exact failure mode the calendaring-sync
+        adapter depends on to detect a concurrent write."""
+        event_id = event_client.create_event(
+            event_calendar_id, _minimal_ical("ifInState Mismatch Test Event")
+        )
+        try:
+            stale_state, other_event_id = _stale_state_after_bystander_write(
+                event_client, event_calendar_id, "ifInState Mismatch Bystander Event"
+            )
+            try:
+                with pytest.raises(JMAPMethodError) as exc_info:
+                    event_client.update_event(
+                        event_id,
+                        _minimal_ical("ifInState Mismatch Test Event Updated"),
+                        if_in_state=stale_state,
+                    )
+                assert exc_info.value.error_type == "stateMismatch"
+            finally:
+                event_client.delete_event(other_event_id)
+        finally:
+            event_client.delete_event(event_id)
+
+    def test_delete_event_with_stale_if_in_state_raises_state_mismatch(
+        self, event_client, event_calendar_id
+    ):
+        event_id = event_client.create_event(
+            event_calendar_id, _minimal_ical("ifInState Delete Mismatch Test Event")
+        )
+        try:
+            stale_state, other_event_id = _stale_state_after_bystander_write(
+                event_client, event_calendar_id, "ifInState Delete Mismatch Bystander Event"
+            )
+            try:
+                with pytest.raises(JMAPMethodError) as exc_info:
+                    event_client.delete_event(event_id, if_in_state=stale_state)
+                assert exc_info.value.error_type == "stateMismatch"
+            finally:
+                event_client.delete_event(other_event_id)
+        finally:
+            event_client.delete_event(event_id)
+
+    def test_get_objects_by_sync_token_pages_with_max_changes(
+        self, event_client, event_calendar_id
+    ):
+        """RFC 8620 section 5.2: hasMoreChanges signals a truncated page, not
+        an error; the caller follows new_state to fetch the rest. Forces a
+        real truncated response with a small max_changes against three real
+        changes, then confirms chaining new_state across two real calls
+        recovers every change with none missed or duplicated."""
+        token_before = event_client.get_sync_token()
+        event_ids = [
+            event_client.create_event(event_calendar_id, _minimal_ical(f"Paged Sync Event {i}"))
+            for i in range(3)
+        ]
+        try:
+            added1, _modified1, _deleted1, old_state1, new_state1, has_more1 = (
+                event_client.get_objects_by_sync_token(token_before, max_changes=2)
+            )
+            assert old_state1 == token_before
+            assert has_more1 is True
+            assert len(added1) == 2
+
+            added2, _modified2, _deleted2, old_state2, new_state2, has_more2 = (
+                event_client.get_objects_by_sync_token(new_state1)
+            )
+            assert old_state2 == new_state1
+            assert has_more2 is False
+
+            all_added_ids = {a.id for a in added1} | {a.id for a in added2}
+            assert all_added_ids == set(event_ids)
+            assert len(added1) + len(added2) == 3
+        finally:
+            for event_id in event_ids:
+                event_client.delete_event(event_id)
 
     def test_recurring_event_create_get_update(self, event_client, event_calendar_id, server):
         """Neither test server accepts RFC 8984's recurrenceRules array; both
@@ -1274,11 +1411,13 @@ class TestAsyncJMAPEventIntegration:
     async def test_event_query_time_range(
         self, async_client, async_calendar_id, async_created_event_id
     ):
-        results = await async_client.search_events(
-            calendar_id=async_calendar_id,
-            start="2026-06-01T00:00:00",
-            end="2026-06-02T00:00:00",
-        )
+        results = (
+            await async_client.search_events(
+                calendar_id=async_calendar_id,
+                start="2026-06-01T00:00:00",
+                end="2026-06-02T00:00:00",
+            )
+        ).events
         assert len(results) >= 1
         assert any("Async Integration Test Event" in jscal_to_ical(r.get_data()) for r in results)
 
@@ -1289,9 +1428,15 @@ class TestAsyncJMAPEventIntegration:
             async_calendar_id, _minimal_ical("Async Sync Test Event")
         )
         try:
-            added, _modified, _deleted, _new_token = await async_client.get_objects_by_sync_token(
-                token_before
-            )
+            (
+                added,
+                _modified,
+                _deleted,
+                old_state,
+                _new_state,
+                _has_more,
+            ) = await async_client.get_objects_by_sync_token(token_before)
+            assert old_state == token_before
             assert any("Async Sync Test Event" in jscal_to_ical(a.get_data()) for a in added)
         finally:
             await async_client.delete_event(event_id)
@@ -1753,7 +1898,9 @@ class TestRicherEventSearchIntegration:
     ):
         event_id = event_client.create_event(event_calendar_id, _attachment_ical())
         try:
-            results = event_client.search_events(calendar_id=event_calendar_id, has_attachment=True)
+            results = event_client.search_events(
+                calendar_id=event_calendar_id, has_attachment=True
+            ).events
             matched = any(r.id == event_id for r in results)
             if server == "cyrus":
                 # Cyrus drops rel: "enclosure" on read-back, seen against a
@@ -1777,7 +1924,7 @@ class TestRicherEventSearchIntegration:
         try:
             results = event_client.search_events(
                 calendar_id=event_calendar_id, has_attachment=False
-            )
+            ).events
             assert not any(r.id == event_id for r in results)
         finally:
             event_client.delete_event(event_id)
@@ -1797,19 +1944,19 @@ class TestRicherEventSearchIntegration:
         try:
             by_email = event_client.search_events(
                 calendar_id=event_calendar_id, participant_email=chair_email
-            )
+            ).events
             assert any(r.id == event_id for r in by_email), (
                 f"{server}: participant_email did not find the seeded participant."
             )
             by_status = event_client.search_events(
                 calendar_id=event_calendar_id, participation_status="accepted"
-            )
+            ).events
             assert any(r.id == event_id for r in by_status), (
                 f"{server}: participation_status did not find the seeded participant."
             )
             by_role = event_client.search_events(
                 calendar_id=event_calendar_id, participant_role="chair"
-            )
+            ).events
             assert any(r.id == event_id for r in by_role), (
                 f"{server}: participant_role='chair' did not find the seeded participant."
             )
@@ -1830,7 +1977,7 @@ class TestRicherEventSearchIntegration:
         try:
             results = event_client.search_events(
                 calendar_id=event_calendar_id, participant_role="attendee"
-            )
+            ).events
             assert not any(r.id == event_id for r in results), (
                 f"{server}: participant_role='attendee' matched the seeded "
                 "participant; the confirmed-live role-drop bug this test "
@@ -1838,3 +1985,37 @@ class TestRicherEventSearchIntegration:
             )
         finally:
             event_client.delete_event(event_id)
+
+    def test_search_events_limit_caps_page_and_total_reflects_full_count(
+        self, event_client, event_calendar_id, server
+    ):
+        """Confirmed live this session: Cyrus includes total unconditionally
+        in CalendarEvent/query responses, even when calculateTotal was never
+        requested, which RFC 8620 section 5.5 says the server "MUST" omit in
+        that case. This locks in that EventSearchResult.total stays None
+        against a real server's response unless calculate_total=True was
+        actually passed, not merely whether the server happened to include
+        one."""
+        event_ids = [
+            event_client.create_event(event_calendar_id, _minimal_ical(f"Paged Search Event {i}"))
+            for i in range(3)
+        ]
+        try:
+            limited = event_client.search_events(calendar_id=event_calendar_id, limit=1)
+            assert len(limited.events) == 1, f"{server}: limit=1 did not cap the page to 1 event."
+            assert limited.total is None, (
+                f"{server}: total must stay None without calculate_total=True, "
+                "regardless of what the server's own response included."
+            )
+
+            with_total = event_client.search_events(
+                calendar_id=event_calendar_id, limit=1, calculate_total=True
+            )
+            assert with_total.total is not None
+            assert with_total.total >= 3, (
+                f"{server}: calculate_total=True should report the full match "
+                f"count across all pages, not just this page's size."
+            )
+        finally:
+            for event_id in event_ids:
+                event_client.delete_event(event_id)
