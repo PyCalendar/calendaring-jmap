@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import icalendar
 
-from calendaring_jmap.convert import jscal_to_ical
+from calendaring_jmap.convert import ical_to_jscal, jscal_to_ical
 from calendaring_jmap.error import JMAPMethodError
 
 if TYPE_CHECKING:
@@ -90,17 +90,18 @@ class JMAPCalendarObject:
     def save(self) -> None:
         """Persist changes made via :meth:`edit_icalendar_instance` to the server.
 
-        Serialises the (possibly edited) icalendar object back to an iCalendar
-        string and calls ``update_event()`` on the parent calendar's client.
+        If :meth:`edit_icalendar_instance` was used, the (possibly edited)
+        icalendar object is converted back to a JSCalendar dict first. If
+        it wasn't, :attr:`data` is sent as-is, with no round trip through
+        iCalendar.
 
         Raises:
             JMAPMethodError: If no parent calendar is set (``parent`` is ``None``).
             RuntimeError: If called on an async-backed calendar.
-            ValueError: If an edit made via :meth:`edit_icalendar_instance`
-                leaves the object in a shape rejected by
-                :meth:`~calendaring_jmap.client.JMAPClient.update_event`
-                (e.g. removing ``UID``/``DTSTART``, or moving ``DTEND``
-                before ``DTSTART``).
+            ValueError: If :meth:`edit_icalendar_instance` was used and the
+                edit leaves the object missing ``UID``/``DTSTART``, or with
+                ``DTEND`` before ``DTSTART``; raised by the conversion back
+                to JSCalendar, before ``update_event`` is ever called.
         """
         if self.parent is None:
             raise JMAPMethodError(url="N/A", reason="Cannot save: no parent calendar is set")
@@ -109,11 +110,9 @@ class JMAPCalendarObject:
                 "save() is not supported for async-backed calendars. "
                 "Use await parent._client.update_event() directly."
             )
-        ical_str = (
-            self._ical_cache.to_ical().decode()
+        event = (
+            ical_to_jscal(self._ical_cache.to_ical().decode())
             if self._ical_cache is not None
-            else jscal_to_ical(self.data)
+            else self.data
         )
-        self.parent._bound_client.update_event(
-            self.id, ical_str, account_id=self.parent._account_id
-        )
+        self.parent._bound_client.update_event(self.id, event, account_id=self.parent._account_id)

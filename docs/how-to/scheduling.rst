@@ -10,9 +10,9 @@ Send an invitation
 
 .. code-block:: python
 
-    event_id = client.send_invite(calendar_id, ical_str)
+    event_id, old_state, new_state = client.send_invite(calendar_id, event)
 
-Identical to :meth:`~calendaring_jmap.client.JMAPClient.create_event`, except the server dispatches iTIP invitations to the event's participants (ATTENDEE/ORGANIZER properties in ``ical_str``). Use :meth:`~calendaring_jmap.client.JMAPClient.create_event` itself for an event with no participants to notify.
+Identical to :meth:`~calendaring_jmap.client.JMAPClient.create_event`, except the server dispatches iTIP invitations to the event's participants (ATTENDEE/ORGANIZER properties, as a JSCalendar ``participants`` map). Use :meth:`~calendaring_jmap.client.JMAPClient.create_event` itself for an event with no participants to notify.
 
 Respond to an invitation
 ========================

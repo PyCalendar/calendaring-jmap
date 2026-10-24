@@ -1,0 +1,1 @@
+``create_event``, ``send_invite``, and ``update_event`` now take a JSCalendar dict instead of an iCalendar string. ``JMAPCalendar.add_event`` and ``JMAPCalendarObject.save`` are unaffected: they still take and produce iCalendar strings.
