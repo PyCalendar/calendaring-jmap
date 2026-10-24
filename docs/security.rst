@@ -25,7 +25,7 @@ calendaring-jmap only corrects ``apiUrl`` when it names the same host as the ses
 TLS and credentials
 -------------------
 
-calendaring-jmap does no custom TLS handling: it relies entirely on its HTTP library (niquests, or requests as a fallback, see :ref:`dependencies`) for certificate verification, and doesn't expose an option to disable it.
+calendaring-jmap does no custom TLS handling: it relies entirely on its HTTP library (niquests, or requests as a fallback, see :ref:`dependencies`) for certificate verification, and doesn't expose an option to disable it. niquests reads trusted roots from the system's own certificate store (via `wassima <https://pypi.org/project/wassima/>`_), so keep that store current; an outdated one can keep trusting a certificate authority that's since been revoked, such as the `eMudhra emSign incident <https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576>`_.
 
 Credentials are read from explicit arguments, ``JMAP_URL``/``JMAP_USERNAME``/``JMAP_PASSWORD`` environment variables, or a YAML config file (default ``~/.config/calendaring-jmap/calendar.yaml``). The config file is stored and read as plaintext; set restrictive file permissions on it (for example, ``chmod 600``) if you use it.
 

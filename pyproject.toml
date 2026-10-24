@@ -31,6 +31,7 @@ classifiers = [
 
 dependencies = [
   "niquests>=3.21.1",
+  "wassima>=2.1.5",
   "icalendar>=7.3.0",
   "PyYAML>=6.0.3",
 ]
