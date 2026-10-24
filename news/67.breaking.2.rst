@@ -1,0 +1,1 @@
+``create_event`` and ``send_invite`` now return a 3-tuple ``(event_id, old_state, new_state)`` instead of just the event id.

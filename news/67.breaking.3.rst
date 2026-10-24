@@ -1,0 +1,1 @@
+``update_event`` now returns ``(old_state, new_state)`` instead of ``None``.

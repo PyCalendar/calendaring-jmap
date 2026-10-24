@@ -83,7 +83,6 @@ from calendaring_jmap.constants import (
     TASK_CAPABILITY,
     UTC_DATETIME_FORMAT,
 )
-from calendaring_jmap.convert import ical_to_jscal
 from calendaring_jmap.convert._patch import _NULL_FOR_UPDATE
 from calendaring_jmap.convert._utils import _duration_to_timedelta
 from calendaring_jmap.error import (
@@ -456,16 +455,40 @@ class _JMAPClientBase:
         return intervals
 
     @staticmethod
-    def _build_event_update_patch(ical_str: str) -> tuple[dict, frozenset[str]]:
+    def _strip_server_managed_event_properties(event: dict) -> dict:
+        """Return a shallow copy of ``event`` without server-managed properties.
+
+        ``id`` and ``baseEventId`` are documented "immutable; server-set" in
+        draft-ietf-jmap-calendars' CalendarEvent property list; ``isOrigin``
+        is documented "server-set" there too. Confirmed live that Stalwart
+        rejects a ``CalendarEvent/set`` create or update carrying any of
+        these with ``invalidProperties``/``"This property is immutable."``,
+        while Cyrus silently tolerates them; stripping unconditionally
+        avoids depending on which server a caller happens to be running
+        against. ``created``/``updated``/``sequence`` need no stripping:
+        confirmed live both servers silently overwrite them with their own
+        values regardless of what the client sends.
+
+        Never mutates ``event`` itself: a caller passing in
+        :attr:`~calendaring_jmap.objects.calendar_object.JMAPCalendarObject.data`
+        should not see it altered by a write call made from it.
+        """
+        copy = dict(event)
+        for key in ("id", "baseEventId", "isOrigin"):
+            copy.pop(key, None)
+        return copy
+
+    @staticmethod
+    def _build_event_update_patch(event: dict) -> tuple[dict, frozenset[str]]:
         """Build a JSCalendar PatchObject for a ``CalendarEvent/set`` update.
 
         See ``update_event`` for why absent properties are explicitly
         nulled. Returns the patch together with the set of keys that were
-        null-injected purely for this cleanup (not present in the converted
-        iCalendar), so the caller can drop them if the server refuses to
-        null a property it does not support.
+        null-injected purely for this cleanup (not present in ``event``),
+        so the caller can drop them if the server refuses to null a
+        property it does not support.
         """
-        patch = ical_to_jscal(ical_str)
+        patch = _JMAPClientBase._strip_server_managed_event_properties(event)
         patch.pop("uid", None)  # uid is server-immutable after creation; patch must omit it
         nulled: set[str] = set()
         for key in _NULL_FOR_UPDATE:
@@ -705,6 +728,22 @@ class _JMAPClientBase:
             if name == "CalendarEvent/query":
                 return parse_event_query(resp_args)
         return 0, None
+
+    @staticmethod
+    def _parse_set_state(responses: list, set_method: str) -> tuple[str, str]:
+        """Return ``(old_state, new_state)`` from a ``*/set`` response.
+
+        ``("", "")`` if no response for ``set_method`` is present in
+        ``responses``. Separate from :func:`~calendaring_jmap._methods.parse_set_response`,
+        which every object type's ``create``/``update``/``destroy`` parsing shares:
+        ``oldState``/``newState`` are only surfaced on the event write methods
+        right now, so reading them here keeps calendars, tasks, and push
+        subscriptions unaffected.
+        """
+        for name, resp_args, _ in responses:
+            if name == set_method:
+                return resp_args.get("oldState", ""), resp_args.get("newState", "")
+        return "", ""
 
     @staticmethod
     def _parse_availability_fallback_response(responses: list) -> list[BusyInterval]:
@@ -1424,13 +1463,14 @@ class JMAPClient(_JMAPClientBase):
     def _create_event_impl(
         self,
         calendar_id: str,
-        ical_str: str,
+        event: dict,
         account_id: str | None,
         send_scheduling_messages: bool,
         if_in_state: str | None = None,
-    ) -> str:
+    ) -> tuple[str, str, str]:
         session = self._get_session()
-        jscal = ical_to_jscal(ical_str, calendar_id=calendar_id)
+        jscal = self._strip_server_managed_event_properties(event)
+        jscal["calendarIds"] = {calendar_id: True}
         target_account = self._resolve_account(session, account_id)
         call = build_event_set_create(
             target_account,
@@ -1439,22 +1479,30 @@ class JMAPClient(_JMAPClientBase):
             if_in_state=if_in_state,
         )
         responses = self._request([call])
-        return self._parse_create_response(
+        event_id = self._parse_create_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set
         )
+        old_state, new_state = self._parse_set_state(responses, "CalendarEvent/set")
+        return event_id, old_state, new_state
 
     def create_event(
         self,
         calendar_id: str,
-        ical_str: str,
+        event: dict,
         account_id: str | None = None,
         if_in_state: str | None = None,
-    ) -> str:
-        """Create a calendar event from an iCalendar string.
+    ) -> tuple[str, str, str]:
+        """Create a calendar event from a JSCalendar dict.
 
         Args:
             calendar_id: The JMAP calendar ID to create the event in.
-            ical_str: A VCALENDAR string representing the event.
+            event: A JSCalendar CalendarEvent dict (:rfc:`8984#section-2.1`),
+                e.g. one returned by :meth:`get_event`. Not mutated: a copy is made
+                before ``id``, ``baseEventId``, and ``isOrigin`` are stripped,
+                since draft-ietf-jmap-calendars documents all three as
+                server-set and immutable, and ``calendarIds`` is overwritten
+                with ``calendar_id``, replacing whatever calendar membership
+                ``event`` already had.
             account_id: The account owning ``calendar_id``; pass the owner's
                 account here to add an event to a calendar shared with you
                 (see ``get_calendars(account_id=...)``).
@@ -1467,17 +1515,19 @@ class JMAPClient(_JMAPClientBase):
                 unconditionally.
 
         Returns:
-            The server-assigned JMAP event ID.
+            A 3-tuple ``(event_id, old_state, new_state)``: the server-assigned
+            JMAP event ID, and the account's state immediately before and
+            after this write (:rfc:`8620#section-5.3`), confirmed live
+            present on every ``CalendarEvent/set`` response on both Cyrus
+            and Stalwart. Pass ``new_state`` as a later call's
+            ``if_in_state`` to require that no other write has landed since.
 
         Raises:
             JMAPMethodError: If the server rejects the create request.
-            ValueError: If ``ical_str`` is malformed in a way ``ical_to_jscal``
-                rejects (missing ``UID``/``DTSTART``, a negative duration,
-                mismatched ``DTSTART``/``DTEND`` value types).
         """
         return self._create_event_impl(
             calendar_id,
-            ical_str,
+            event,
             account_id,
             send_scheduling_messages=False,
             if_in_state=if_in_state,
@@ -1486,37 +1536,36 @@ class JMAPClient(_JMAPClientBase):
     def send_invite(
         self,
         calendar_id: str,
-        ical_str: str,
+        event: dict,
         account_id: str | None = None,
         if_in_state: str | None = None,
-    ) -> str:
+    ) -> tuple[str, str, str]:
         """Create a calendar event and notify its participants.
 
         Identical to :meth:`create_event`, except the server actually
-        dispatches iTIP invitations to the event's participants (an iCalendar
-        string with ATTENDEE/ORGANIZER properties). ``create_event`` itself
-        never sends scheduling messages; use this instead when the event has
+        dispatches iTIP invitations to the event's participants (a JSCalendar
+        dict with ``participants`` set). ``create_event`` itself never sends
+        scheduling messages; use this instead when the event has
         participants who need to be notified.
 
         Args:
             calendar_id: The JMAP calendar ID to create the event in.
-            ical_str: A VCALENDAR string representing the event.
+            event: A JSCalendar CalendarEvent dict. See :meth:`create_event`.
             account_id: The account owning ``calendar_id``, same as
                 :meth:`create_event`.
             if_in_state: See :meth:`create_event`.
 
         Returns:
-            The server-assigned JMAP event ID.
+            See :meth:`create_event`.
 
         Raises:
             JMAPMethodError: If the server rejects the create request, or
                 with ``error_type == "noSupportedScheduleMethods"`` if a
                 participant has no usable delivery method.
-            ValueError: Same conditions as :meth:`create_event`.
         """
         return self._create_event_impl(
             calendar_id,
-            ical_str,
+            event,
             account_id,
             send_scheduling_messages=True,
             if_in_state=if_in_state,
@@ -1820,21 +1869,28 @@ class JMAPClient(_JMAPClientBase):
     def update_event(
         self,
         event_id: str,
-        ical_str: str,
+        event: dict,
         account_id: str | None = None,
         if_in_state: str | None = None,
-    ) -> None:
-        """Update a calendar event from an iCalendar string.
+    ) -> tuple[str, str]:
+        """Update a calendar event from a JSCalendar dict.
 
         A property present on the server's own copy but absent from
-        ``ical_str`` is explicitly cleared, not left alone: :rfc:`8620#section-5.3`
+        ``event`` is explicitly cleared, not left alone: :rfc:`8620#section-5.3`
         merge semantics mean an omitted property would otherwise be
         preserved rather than removed, so this nulls it to actually drop it
         server-side.
 
         Args:
             event_id: The JMAP event ID to update.
-            ical_str: A VCALENDAR string with the updated event data.
+            event: A JSCalendar CalendarEvent dict with the updated event
+                data, e.g. one returned by :meth:`get_event` and modified in
+                place. Not mutated: a copy is made before ``id``,
+                ``baseEventId``, and ``isOrigin`` are stripped (server-managed;
+                see :meth:`create_event`). ``calendarIds``, if present, is
+                sent through unchanged; this method has no ``calendar_id``
+                argument to override it with, so moving an event between
+                calendars this way is left to the caller's own ``event``.
             account_id: The account owning ``event_id``; pass the owner's
                 account here to update an event on a calendar shared with
                 you.
@@ -1848,15 +1904,19 @@ class JMAPClient(_JMAPClientBase):
                 null-key-dropping loop below, since those retries narrow the
                 same patch rather than re-reading the account's state.
 
+        Returns:
+            A 2-tuple ``(old_state, new_state)``, the account's state
+            immediately before and after this write (:rfc:`8620#section-5.3`),
+            confirmed live present on every ``CalendarEvent/set`` response on
+            both Cyrus and Stalwart. Pass ``new_state`` as a later call's
+            ``if_in_state`` to require that no other write has landed since.
+
         Raises:
             JMAPMethodError: If the server rejects the update.
-            ValueError: If ``ical_str`` is malformed in a way ``ical_to_jscal``
-                rejects (missing ``UID``/``DTSTART``, a negative duration,
-                mismatched ``DTSTART``/``DTEND`` value types).
         """
         session = self._get_session()
         target_account = self._resolve_account(session, account_id)
-        patch, nulled = self._build_event_update_patch(ical_str)
+        patch, nulled = self._build_event_update_patch(event)
         while True:
             responses = self._request(
                 [build_event_set_update(target_account, {event_id: patch}, if_in_state=if_in_state)]
@@ -1869,6 +1929,7 @@ class JMAPClient(_JMAPClientBase):
         self._parse_update_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set, event_id
         )
+        return self._parse_set_state(responses, "CalendarEvent/set")
 
     def _search(
         self,
@@ -2431,10 +2492,17 @@ class JMAPClient(_JMAPClientBase):
               server. Compare this against ``sync_token`` to detect a server
               that silently accepted an invalid or stale state instead of
               reporting an error (:rfc:`8620#section-5.2` does not require a
-              server to validate ``sinceState`` against a real prior state;
-              confirmed live that Cyrus echoes back whatever value it was
-              given, including one that was never actually issued, rather
-              than rejecting it).
+              server to validate ``sinceState`` against a real prior state).
+              Confirmed live that neither server validates consistently:
+              Cyrus rejects a non-numeric or empty ``sinceState`` with
+              ``cannotCalculateChanges``, but silently accepts and echoes
+              back any numeric-looking string, including one that was never
+              actually issued. Stalwart rejects nearly everything invalid
+              with ``invalidArguments``, except a string starting with the
+              literal character ``n``, which it accepts and normalizes
+              ``oldState`` down to just ``"n"`` regardless of what follows,
+              a quirk of its own internal state encoding rather than general
+              leniency.
             - ``new_state``: Pass to the next call to this method as
               ``sync_token``, whether or not ``has_more_changes`` is set.
               Named to match ``oldState``/``newState`` as a pair

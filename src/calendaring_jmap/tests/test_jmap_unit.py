@@ -909,17 +909,19 @@ class TestJMAPCalendar:
 
     def test_calendar_add_event_dispatches_to_async_when_async_backed(self):
         mock_client = MagicMock()
-        mock_client.create_event = AsyncMock(return_value="ev-new-id")
+        mock_client.create_event = AsyncMock(return_value=("ev-new-id", "s0", "s1"))
         cal: JMAPCalendar[Literal[True]] = JMAPCalendar(id="cal1", name="Test")
         cal._client = mock_client
         cal._is_async = True
         import asyncio
 
-        result = asyncio.run(cal.add_event("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"))
+        result = asyncio.run(cal.add_event(self._MINIMAL_ICAL))
         assert result == "ev-new-id"
-        mock_client.create_event.assert_awaited_once_with(
-            "cal1", "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", account_id=None
-        )
+        mock_client.create_event.assert_awaited_once()
+        call_args = mock_client.create_event.call_args
+        assert call_args[0][0] == "cal1"
+        assert call_args[0][1].get("calendarIds") == {"cal1": True}
+        assert call_args.kwargs["account_id"] is None
 
 
 _MINIMAL_JSCAL_DICT = {
@@ -973,8 +975,24 @@ class TestJMAPCalendarObject:
         mock_client.update_event.assert_called_once()
         call_args = mock_client.update_event.call_args
         assert call_args[0][0] == "ev-obj-1"
-        assert isinstance(call_args[0][1], str)
+        # edit_icalendar_instance() was used, so save() re-converts the
+        # (possibly edited) icalendar object back to JSCalendar.
+        assert isinstance(call_args[0][1], dict)
         assert call_args.kwargs["account_id"] is None
+
+    def test_save_sends_data_directly_without_edit(self):
+        mock_client = MagicMock()
+        mock_parent = JMAPCalendar(id="cal1", name="Test")
+        mock_parent._client = mock_client
+
+        obj = JMAPCalendarObject(data=_MINIMAL_JSCAL_DICT, parent=mock_parent)
+        obj.save()
+
+        mock_client.update_event.assert_called_once()
+        call_args = mock_client.update_event.call_args
+        # No edit_icalendar_instance() edit happened, so save() sends
+        # self.data straight through, no iCalendar round trip.
+        assert call_args[0][1] is _MINIMAL_JSCAL_DICT
 
     def test_save_uses_parent_account_id_when_shared(self):
         mock_client = MagicMock()
@@ -5535,6 +5553,20 @@ def _participant_event(
     }
 
 
+def _event_with_stale_server_managed_properties(base_event: dict, event_id: str) -> dict:
+    """Return a copy of ``base_event`` with ``id``/``baseEventId``/``isOrigin``
+    set to values a server would reject or treat as immutable, to confirm
+    ``create_event``/``update_event`` strip them before sending. Shared by
+    the sync and async strip tests for both methods, which otherwise build
+    this same poisoned dict four times over."""
+    return {
+        **base_event,
+        "id": event_id,
+        "baseEventId": "stale-base-id",
+        "isOrigin": True,
+    }
+
+
 class TestJMAPClientEvents(_MockedClientMixin):
     _MINIMAL_ICAL = (
         "BEGIN:VCALENDAR\r\n"
@@ -5546,6 +5578,14 @@ class TestJMAPClientEvents(_MockedClientMixin):
         "END:VEVENT\r\n"
         "END:VCALENDAR\r\n"
     )
+
+    # JSCalendar equivalent of _MINIMAL_ICAL, what a caller passes to
+    # create_event/send_invite/update_event now that they take a dict.
+    # calendarIds points at a different calendar than any test below passes
+    # as calendar_id, so test_create_event_passes_calendar_id's assertion
+    # that the server call's calendarIds matches the calendar_id argument
+    # (not whatever was already in the dict) stays meaningful.
+    _MINIMAL_EVENT = ical_to_jscal(_MINIMAL_ICAL, calendar_id="original-calendar")
 
     _RAW_EVENT = {
         "id": "ev1",
@@ -5565,7 +5605,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
     def test_create_event_returns_server_id(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-1"}})
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        event_id = client.create_event("cal1", self._MINIMAL_ICAL)
+        event_id, _, _ = client.create_event("cal1", self._MINIMAL_EVENT)
         assert event_id == "sv-1"
 
     def test_create_event_raises_on_failure(self, monkeypatch):
@@ -5574,24 +5614,43 @@ class TestJMAPClientEvents(_MockedClientMixin):
         )
         client = _make_client_with_mocked_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
-            client.create_event("cal1", self._MINIMAL_ICAL)
+            client.create_event("cal1", self._MINIMAL_EVENT)
         assert exc_info.value.error_type == "invalidArguments"
 
     def test_create_event_raises_on_malformed_response(self, monkeypatch):
         resp = self._set_response(created={}, notCreated={})
         client = _make_client_with_mocked_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError):
-            client.create_event("cal1", self._MINIMAL_ICAL)
+            client.create_event("cal1", self._MINIMAL_EVENT)
 
     def test_create_event_passes_calendar_id(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-2"}})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.create_event("my-calendar", self._MINIMAL_ICAL)
+        client.create_event("my-calendar", self._MINIMAL_EVENT)
 
         method_calls = captured["json"]["methodCalls"]
         create_args = method_calls[0][1]
         event_payload = create_args["create"]["new-0"]
         assert event_payload.get("calendarIds") == {"my-calendar": True}
+
+    def test_create_event_does_not_mutate_caller_dict(self, monkeypatch):
+        resp = self._set_response(created={"new-0": {"id": "sv-3"}})
+        client, _ = self._capturing_client(monkeypatch, resp)
+        event = dict(self._MINIMAL_EVENT)
+        event["id"] = "stale-id-from-a-different-event"
+        before = dict(event)
+        client.create_event("my-calendar", event)
+        assert event == before
+
+    def test_create_event_strips_server_managed_properties(self, monkeypatch):
+        resp = self._set_response(created={"new-0": {"id": "sv-4"}})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        event = _event_with_stale_server_managed_properties(self._MINIMAL_EVENT, "stale-id")
+        client.create_event("my-calendar", event)
+        event_payload = captured["json"]["methodCalls"][0][1]["create"]["new-0"]
+        assert "id" not in event_payload
+        assert "baseEventId" not in event_payload
+        assert "isOrigin" not in event_payload
 
     def test_get_event_returns_ical(self, monkeypatch):
         raw_event = {
@@ -5625,24 +5684,52 @@ class TestJMAPClientEvents(_MockedClientMixin):
     def test_update_event_success(self, monkeypatch):
         resp = self._set_response(updated={"ev1": None})
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        client.update_event("ev1", self._MINIMAL_ICAL)
+        client.update_event("ev1", self._MINIMAL_EVENT)
 
     def test_update_event_raises_on_failure(self, monkeypatch):
         resp = self._set_response(notUpdated={"ev1": {"type": "notFound"}})
         client = _make_client_with_mocked_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
-            client.update_event("ev1", self._MINIMAL_ICAL)
+            client.update_event("ev1", self._MINIMAL_EVENT)
         assert exc_info.value.error_type == "notFound"
 
     def test_update_event_drops_uid_from_patch(self, monkeypatch):
         resp = self._set_response(updated={"ev1": None})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.update_event("ev1", self._MINIMAL_ICAL)
+        client.update_event("ev1", self._MINIMAL_EVENT)
 
         method_calls = captured["json"]["methodCalls"]
         update_args = method_calls[0][1]
         patch = update_args["update"]["ev1"]
         assert "uid" not in patch
+
+    def test_update_event_does_not_mutate_caller_dict(self, monkeypatch):
+        resp = self._set_response(updated={"ev1": None})
+        client, _ = self._capturing_client(monkeypatch, resp)
+        event = dict(self._MINIMAL_EVENT)
+        before = dict(event)
+        client.update_event("ev1", event)
+        assert event == before
+
+    def test_update_event_strips_server_managed_properties(self, monkeypatch):
+        resp = self._set_response(updated={"ev1": None})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        event = _event_with_stale_server_managed_properties(self._MINIMAL_EVENT, "ev1")
+        client.update_event("ev1", event)
+        patch = captured["json"]["methodCalls"][0][1]["update"]["ev1"]
+        assert "id" not in patch
+        assert "baseEventId" not in patch
+        assert "isOrigin" not in patch
+
+    def test_update_event_keeps_calendar_ids_unchanged(self, monkeypatch):
+        # update_event has no calendar_id argument to override calendarIds
+        # with, unlike create_event; whatever the caller's dict already has
+        # passes through as-is.
+        resp = self._set_response(updated={"ev1": None})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.update_event("ev1", self._MINIMAL_EVENT)
+        patch = captured["json"]["methodCalls"][0][1]["update"]["ev1"]
+        assert patch["calendarIds"] == {"original-calendar": True}
 
     def test_update_event_nulls_removed_optional_properties(self, monkeypatch):
         # RFC 8620 section 3.3: absent keys in a PatchObject preserve the server value.
@@ -5660,7 +5747,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         resp = self._set_response(updated={"ev1": None})
         client, captured = self._capturing_client(monkeypatch, resp)
         # First, pretend the event had a location (we don't need to call create; just update)
-        client.update_event("ev1", _ICAL_WITHOUT_LOCATION)
+        client.update_event("ev1", ical_to_jscal(_ICAL_WITHOUT_LOCATION))
         patch = captured["json"]["methodCalls"][0][1]["update"]["ev1"]
         # The patch must contain explicit null for 'locations' to remove it from the server
         assert "locations" in patch
@@ -5715,7 +5802,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
             self._set_response(updated={"ev1": None}),
         ]
         client, captured = self._sequence_client(responses)
-        client.update_event("ev1", self._MINIMAL_ICAL)
+        client.update_event("ev1", self._MINIMAL_EVENT)
 
         assert len(captured["patches"]) == 3
         # First attempt nulled both recurrence keys; the final accepted patch dropped them.
@@ -5737,7 +5824,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         )
         client, captured = self._sequence_client([resp])
         with pytest.raises(JMAPMethodError) as exc_info:
-            client.update_event("ev1", self._MINIMAL_ICAL)
+            client.update_event("ev1", self._MINIMAL_EVENT)
         assert exc_info.value.error_type == "invalidProperties"
         assert len(captured["patches"]) == 1  # no retry
 
@@ -5756,7 +5843,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
     def test_update_event_uses_given_account_id(self, monkeypatch):
         resp = self._set_response(updated={"ev1": None})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.update_event("ev1", self._MINIMAL_ICAL, account_id="owner-account")
+        client.update_event("ev1", self._MINIMAL_EVENT, account_id="owner-account")
         update_args = captured["json"]["methodCalls"][0][1]
         assert update_args["accountId"] == "owner-account"
 
@@ -5777,14 +5864,14 @@ class TestJMAPClientEvents(_MockedClientMixin):
     def test_create_event_passes_if_in_state(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-1"}})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.create_event("cal1", self._MINIMAL_ICAL, if_in_state="state-1")
+        client.create_event("cal1", self._MINIMAL_EVENT, if_in_state="state-1")
         create_args = captured["json"]["methodCalls"][0][1]
         assert create_args["ifInState"] == "state-1"
 
     def test_create_event_omits_if_in_state_when_not_passed(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-1"}})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.create_event("cal1", self._MINIMAL_ICAL)
+        client.create_event("cal1", self._MINIMAL_EVENT)
         create_args = captured["json"]["methodCalls"][0][1]
         assert "ifInState" not in create_args
 
@@ -5792,22 +5879,38 @@ class TestJMAPClientEvents(_MockedClientMixin):
         resp = {"methodResponses": [["error", {"type": "stateMismatch"}, "ev-set-create-0"]]}
         client = _make_client_with_mocked_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
-            client.create_event("cal1", self._MINIMAL_ICAL, if_in_state="stale-state")
+            client.create_event("cal1", self._MINIMAL_EVENT, if_in_state="stale-state")
         assert exc_info.value.error_type == "stateMismatch"
+
+    def test_create_event_returns_old_and_new_state(self, monkeypatch):
+        resp = self._set_response(
+            created={"new-0": {"id": "sv-1"}}, oldState="state-0", newState="state-1"
+        )
+        client = _make_client_with_mocked_session(monkeypatch, resp)
+        _, old_state, new_state = client.create_event("cal1", self._MINIMAL_EVENT)
+        assert old_state == "state-0"
+        assert new_state == "state-1"
 
     def test_update_event_passes_if_in_state(self, monkeypatch):
         resp = self._set_response(updated={"ev1": None})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.update_event("ev1", self._MINIMAL_ICAL, if_in_state="state-1")
+        client.update_event("ev1", self._MINIMAL_EVENT, if_in_state="state-1")
         update_args = captured["json"]["methodCalls"][0][1]
         assert update_args["ifInState"] == "state-1"
 
     def test_update_event_omits_if_in_state_when_not_passed(self, monkeypatch):
         resp = self._set_response(updated={"ev1": None})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.update_event("ev1", self._MINIMAL_ICAL)
+        client.update_event("ev1", self._MINIMAL_EVENT)
         update_args = captured["json"]["methodCalls"][0][1]
         assert "ifInState" not in update_args
+
+    def test_update_event_returns_old_and_new_state(self, monkeypatch):
+        resp = self._set_response(updated={"ev1": None}, oldState="state-1", newState="state-2")
+        client = _make_client_with_mocked_session(monkeypatch, resp)
+        old_state, new_state = client.update_event("ev1", self._MINIMAL_EVENT)
+        assert old_state == "state-1"
+        assert new_state == "state-2"
 
     def test_delete_event_passes_if_in_state(self, monkeypatch):
         resp = self._set_response(destroyed=["ev1"])
@@ -5826,20 +5929,20 @@ class TestJMAPClientEvents(_MockedClientMixin):
     def test_send_invite_passes_if_in_state(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-1"}})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.send_invite("cal1", self._MINIMAL_ICAL, if_in_state="state-1")
+        client.send_invite("cal1", self._MINIMAL_EVENT, if_in_state="state-1")
         create_args = captured["json"]["methodCalls"][0][1]
         assert create_args["ifInState"] == "state-1"
 
     def test_send_invite_returns_server_id(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-1"}})
         client = _make_client_with_mocked_session(monkeypatch, resp)
-        event_id = client.send_invite("cal1", self._MINIMAL_ICAL)
+        event_id, _, _ = client.send_invite("cal1", self._MINIMAL_EVENT)
         assert event_id == "sv-1"
 
     def test_send_invite_sends_scheduling_messages(self, monkeypatch):
         resp = self._set_response(created={"new-0": {"id": "sv-1"}})
         client, captured = self._capturing_client(monkeypatch, resp)
-        client.send_invite("cal1", self._MINIMAL_ICAL)
+        client.send_invite("cal1", self._MINIMAL_EVENT)
         create_args = captured["json"]["methodCalls"][0][1]
         assert create_args["sendSchedulingMessages"] is True
 
@@ -5847,7 +5950,7 @@ class TestJMAPClientEvents(_MockedClientMixin):
         resp = self._set_response(notCreated={"new-0": {"type": "noSupportedScheduleMethods"}})
         client = _make_client_with_mocked_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
-            client.send_invite("cal1", self._MINIMAL_ICAL)
+            client.send_invite("cal1", self._MINIMAL_EVENT)
         assert exc_info.value.error_type == "noSupportedScheduleMethods"
 
     def _participant_event_response(self, own_email="me@example.com", participant_id="p1"):
@@ -7949,6 +8052,10 @@ class TestAsyncJMAPClient:
         ]
     )
 
+    # JSCalendar equivalent of _MINIMAL_ICAL, what a caller passes to
+    # create_event/send_invite/update_event now that they take a dict.
+    _MINIMAL_EVENT = ical_to_jscal(_MINIMAL_ICAL, calendar_id="original-calendar")
+
     _RAW_EVENT = {
         "id": "ev-async-1",
         "uid": "async-test-uid@example.com",
@@ -8173,7 +8280,7 @@ class TestAsyncJMAPClient:
     async def test_create_event_returns_id(self, monkeypatch):
         resp = self._event_set_resp(created={"new-0": {"id": "ev-new-1"}}, notCreated={})
         self._patch_async_session(monkeypatch, resp)
-        event_id = await self._make_client().create_event("cal1", self._MINIMAL_ICAL)
+        event_id, _, _ = await self._make_client().create_event("cal1", self._MINIMAL_EVENT)
         assert event_id == "ev-new-1"
 
     @pytest.mark.asyncio
@@ -8181,7 +8288,7 @@ class TestAsyncJMAPClient:
         resp = self._event_set_resp(created={}, notCreated={"new-0": {"type": "invalidArguments"}})
         self._patch_async_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
-            await self._make_client().create_event("cal1", self._MINIMAL_ICAL)
+            await self._make_client().create_event("cal1", self._MINIMAL_EVENT)
         assert exc_info.value.error_type == "invalidArguments"
 
     @pytest.mark.asyncio
@@ -8212,14 +8319,14 @@ class TestAsyncJMAPClient:
     async def test_update_event_success(self, monkeypatch):
         resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
         self._patch_async_session(monkeypatch, resp)
-        await self._make_client().update_event("ev-async-1", self._MINIMAL_ICAL)
+        await self._make_client().update_event("ev-async-1", self._MINIMAL_EVENT)
 
     @pytest.mark.asyncio
     async def test_update_event_raises_on_failure(self, monkeypatch):
         resp = self._event_set_resp(updated={}, notUpdated={"ev-async-1": {"type": "notFound"}})
         self._patch_async_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
-            await self._make_client().update_event("ev-async-1", self._MINIMAL_ICAL)
+            await self._make_client().update_event("ev-async-1", self._MINIMAL_EVENT)
         assert exc_info.value.error_type == "notFound"
 
     @pytest.mark.asyncio
@@ -8227,7 +8334,7 @@ class TestAsyncJMAPClient:
         resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
         mock_http = self._patch_async_session(monkeypatch, resp)
         await self._make_client().update_event(
-            "ev-async-1", self._MINIMAL_ICAL, account_id="owner-account"
+            "ev-async-1", self._MINIMAL_EVENT, account_id="owner-account"
         )
         update_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
         assert update_args["accountId"] == "owner-account"
@@ -8259,7 +8366,7 @@ class TestAsyncJMAPClient:
         resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
         mock_http = self._patch_async_session(monkeypatch, resp)
         await self._make_client().update_event(
-            "ev-async-1", self._MINIMAL_ICAL, if_in_state="state-1"
+            "ev-async-1", self._MINIMAL_EVENT, if_in_state="state-1"
         )
         update_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
         assert update_args["ifInState"] == "state-1"
@@ -8268,9 +8375,21 @@ class TestAsyncJMAPClient:
     async def test_update_event_omits_if_in_state_when_not_passed(self, monkeypatch):
         resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
         mock_http = self._patch_async_session(monkeypatch, resp)
-        await self._make_client().update_event("ev-async-1", self._MINIMAL_ICAL)
+        await self._make_client().update_event("ev-async-1", self._MINIMAL_EVENT)
         update_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
         assert "ifInState" not in update_args
+
+    @pytest.mark.asyncio
+    async def test_update_event_returns_old_and_new_state(self, monkeypatch):
+        resp = self._event_set_resp(
+            updated={"ev-async-1": None}, notUpdated={}, oldState="s1", newState="s2"
+        )
+        self._patch_async_session(monkeypatch, resp)
+        old_state, new_state = await self._make_client().update_event(
+            "ev-async-1", self._MINIMAL_EVENT
+        )
+        assert old_state == "s1"
+        assert new_state == "s2"
 
     @pytest.mark.asyncio
     async def test_delete_event_passes_if_in_state(self, monkeypatch):
@@ -8292,15 +8411,25 @@ class TestAsyncJMAPClient:
     async def test_create_event_omits_if_in_state_when_not_passed(self, monkeypatch):
         resp = self._event_set_resp(created={"new-0": {"id": "sv-1"}})
         mock_http = self._patch_async_session(monkeypatch, resp)
-        await self._make_client().create_event("cal1", self._MINIMAL_ICAL)
+        await self._make_client().create_event("cal1", self._MINIMAL_EVENT)
         create_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
         assert "ifInState" not in create_args
+
+    @pytest.mark.asyncio
+    async def test_create_event_returns_old_and_new_state(self, monkeypatch):
+        resp = self._event_set_resp(created={"new-0": {"id": "sv-1"}}, oldState="s0", newState="s1")
+        self._patch_async_session(monkeypatch, resp)
+        _, old_state, new_state = await self._make_client().create_event(
+            "cal1", self._MINIMAL_EVENT
+        )
+        assert old_state == "s0"
+        assert new_state == "s1"
 
     @pytest.mark.asyncio
     async def test_send_invite_passes_if_in_state(self, monkeypatch):
         resp = self._event_set_resp(created={"new-0": {"id": "sv-1"}})
         mock_http = self._patch_async_session(monkeypatch, resp)
-        await self._make_client().send_invite("cal1", self._MINIMAL_ICAL, if_in_state="state-1")
+        await self._make_client().send_invite("cal1", self._MINIMAL_EVENT, if_in_state="state-1")
         create_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
         assert create_args["ifInState"] == "state-1"
 
@@ -8310,7 +8439,7 @@ class TestAsyncJMAPClient:
         self._patch_async_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
             await self._make_client().create_event(
-                "cal1", self._MINIMAL_ICAL, if_in_state="stale-state"
+                "cal1", self._MINIMAL_EVENT, if_in_state="stale-state"
             )
         assert exc_info.value.error_type == "stateMismatch"
 
@@ -8326,14 +8455,14 @@ class TestAsyncJMAPClient:
     async def test_send_invite_returns_id(self, monkeypatch):
         resp = self._event_set_resp(created={"new-0": {"id": "sv-async-1"}}, notCreated={})
         self._patch_async_session(monkeypatch, resp)
-        event_id = await self._make_client().send_invite("cal1", self._MINIMAL_ICAL)
+        event_id, _, _ = await self._make_client().send_invite("cal1", self._MINIMAL_EVENT)
         assert event_id == "sv-async-1"
 
     @pytest.mark.asyncio
     async def test_send_invite_sends_scheduling_messages(self, monkeypatch):
         resp = self._event_set_resp(created={"new-0": {"id": "sv-async-1"}}, notCreated={})
         mock_http = self._patch_async_session(monkeypatch, resp)
-        await self._make_client().send_invite("cal1", self._MINIMAL_ICAL)
+        await self._make_client().send_invite("cal1", self._MINIMAL_EVENT)
         create_args = mock_http.post.call_args.kwargs["json"]["methodCalls"][0][1]
         assert create_args["sendSchedulingMessages"] is True
 
@@ -9126,19 +9255,68 @@ class TestAsyncJMAPClient:
     async def test_create_event_passes_calendar_id(self, monkeypatch):
         resp = self._event_set_resp(created={"new-0": {"id": "ev-new-1"}}, notCreated={})
         client, captured = self._capturing_async_session(monkeypatch, resp)
-        await client.create_event("my-cal", self._MINIMAL_ICAL)
+        await client.create_event("my-cal", self._MINIMAL_EVENT)
         create_args = captured["json"]["methodCalls"][0][1]
         new_event = create_args["create"]["new-0"]
         assert "my-cal" in new_event.get("calendarIds", {})
 
     @pytest.mark.asyncio
+    async def test_create_event_does_not_mutate_caller_dict(self, monkeypatch):
+        resp = self._event_set_resp(created={"new-0": {"id": "ev-new-1"}}, notCreated={})
+        client, _ = self._capturing_async_session(monkeypatch, resp)
+        event = dict(self._MINIMAL_EVENT)
+        event["id"] = "stale-id-from-a-different-event"
+        before = dict(event)
+        await client.create_event("my-cal", event)
+        assert event == before
+
+    @pytest.mark.asyncio
+    async def test_create_event_strips_server_managed_properties(self, monkeypatch):
+        resp = self._event_set_resp(created={"new-0": {"id": "ev-new-1"}}, notCreated={})
+        client, captured = self._capturing_async_session(monkeypatch, resp)
+        event = _event_with_stale_server_managed_properties(self._MINIMAL_EVENT, "stale-id")
+        await client.create_event("my-cal", event)
+        event_payload = captured["json"]["methodCalls"][0][1]["create"]["new-0"]
+        assert "id" not in event_payload
+        assert "baseEventId" not in event_payload
+        assert "isOrigin" not in event_payload
+
+    @pytest.mark.asyncio
     async def test_update_event_drops_uid_from_patch(self, monkeypatch):
         resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
         client, captured = self._capturing_async_session(monkeypatch, resp)
-        await client.update_event("ev-async-1", self._MINIMAL_ICAL)
+        await client.update_event("ev-async-1", self._MINIMAL_EVENT)
         update_args = captured["json"]["methodCalls"][0][1]
         patch = update_args["update"]["ev-async-1"]
         assert "uid" not in patch
+
+    @pytest.mark.asyncio
+    async def test_update_event_does_not_mutate_caller_dict(self, monkeypatch):
+        resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
+        client, _ = self._capturing_async_session(monkeypatch, resp)
+        event = dict(self._MINIMAL_EVENT)
+        before = dict(event)
+        await client.update_event("ev-async-1", event)
+        assert event == before
+
+    @pytest.mark.asyncio
+    async def test_update_event_strips_server_managed_properties(self, monkeypatch):
+        resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
+        client, captured = self._capturing_async_session(monkeypatch, resp)
+        event = _event_with_stale_server_managed_properties(self._MINIMAL_EVENT, "ev-async-1")
+        await client.update_event("ev-async-1", event)
+        patch = captured["json"]["methodCalls"][0][1]["update"]["ev-async-1"]
+        assert "id" not in patch
+        assert "baseEventId" not in patch
+        assert "isOrigin" not in patch
+
+    @pytest.mark.asyncio
+    async def test_update_event_keeps_calendar_ids_unchanged(self, monkeypatch):
+        resp = self._event_set_resp(updated={"ev-async-1": None}, notUpdated={})
+        client, captured = self._capturing_async_session(monkeypatch, resp)
+        await client.update_event("ev-async-1", self._MINIMAL_EVENT)
+        patch = captured["json"]["methodCalls"][0][1]["update"]["ev-async-1"]
+        assert patch["calendarIds"] == {"original-calendar": True}
 
     @pytest.mark.asyncio
     async def test_search_events_passes_calendar_id_filter(self, monkeypatch):
@@ -10038,7 +10216,7 @@ class TestAsyncJMAPClient:
 
         mock_http.post = post
         monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
-        await self._make_client().update_event("ev-async-1", self._MINIMAL_ICAL)
+        await self._make_client().update_event("ev-async-1", self._MINIMAL_EVENT)
         assert len(patches_seen) == 2
         assert patches_seen[0]["recurrenceRule"] is None
         assert "recurrenceRule" not in patches_seen[1]

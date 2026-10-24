@@ -31,7 +31,7 @@ from calendaring_jmap._http import requests
 from calendaring_jmap._methods import parse_set_response
 from calendaring_jmap.client import _CONTACTS_USING, _PUSH_USING, _JMAPClientBase
 from calendaring_jmap.constants import CALENDAR_CAPABILITY, CONTACTS_CAPABILITY
-from calendaring_jmap.convert import jscal_to_ical
+from calendaring_jmap.convert import ical_to_jscal, jscal_to_ical
 from calendaring_jmap.error import JMAPMethodError
 from calendaring_jmap.session import fetch_session
 
@@ -141,6 +141,21 @@ def _minimal_ical(title: str = "Test Event", start: datetime | None = None) -> s
     return _vevent_ical(title, start or _DEFAULT_ICAL_START, timedelta(hours=1))
 
 
+def _minimal_event(
+    title: str = "Test Event", start: datetime | None = None, calendar_id: str | None = None
+) -> dict:
+    """``ical_to_jscal(_minimal_ical(...), calendar_id=...)`` in one call.
+
+    Shared by every integration test that just needs a fresh, minimal
+    JSCalendar dict to pass to ``create_event``/``send_invite``/
+    ``update_event``, the common case; a test exercising recurrence,
+    attachments, or other non-minimal shapes still builds its own
+    iCalendar string and converts it directly, since this helper only
+    covers the minimal case.
+    """
+    return ical_to_jscal(_minimal_ical(title, start=start), calendar_id=calendar_id)
+
+
 def _recurring_ical(
     rrule: str,
     title: str = "Recurring Test Event",
@@ -245,7 +260,9 @@ def calendar_id(client):
 
 @pytest.fixture
 def created_event_id(client, calendar_id):
-    event_id = client.create_event(calendar_id, _minimal_ical("Integration Test Event"))
+    event_id, _, _ = client.create_event(
+        calendar_id, _minimal_event("Integration Test Event", calendar_id=calendar_id)
+    )
     yield event_id
     try:
         client.delete_event(event_id)
@@ -267,8 +284,9 @@ async def async_calendar_id(async_client):
 
 @pytest_asyncio.fixture
 async def async_created_event_id(async_client, async_calendar_id):
-    event_id = await async_client.create_event(
-        async_calendar_id, _minimal_ical("Async Integration Test Event")
+    event_id, _, _ = await async_client.create_event(
+        async_calendar_id,
+        _minimal_event("Async Integration Test Event", calendar_id=async_calendar_id),
     )
     yield event_id
     try:
@@ -298,8 +316,9 @@ def stalwart_calendar_id(stalwart_client):
 
 @pytest.fixture
 def stalwart_event_id(stalwart_client, stalwart_calendar_id):
-    event_id = stalwart_client.create_event(
-        stalwart_calendar_id, _minimal_ical("Stalwart Test Event")
+    event_id, _, _ = stalwart_client.create_event(
+        stalwart_calendar_id,
+        _minimal_event("Stalwart Test Event", calendar_id=stalwart_calendar_id),
     )
     yield event_id
     try:
@@ -449,7 +468,9 @@ class TestJMAPCalendarManagementIntegration:
 
     def test_delete_calendar_with_event_raises_calendar_has_event(self, calendar_management_client):
         cal_id = calendar_management_client.create_calendar("Calendar With Event")
-        calendar_management_client.create_event(cal_id, _minimal_ical("Blocking Event"))
+        calendar_management_client.create_event(
+            cal_id, _minimal_event("Blocking Event", calendar_id=cal_id)
+        )
         try:
             with pytest.raises(JMAPMethodError) as exc_info:
                 calendar_management_client.delete_calendar(cal_id)
@@ -465,7 +486,9 @@ class TestJMAPCalendarManagementIntegration:
         self, calendar_management_client
     ):
         cal_id = calendar_management_client.create_calendar("Calendar With Event To Remove")
-        calendar_management_client.create_event(cal_id, _minimal_ical("Removable Event"))
+        calendar_management_client.create_event(
+            cal_id, _minimal_event("Removable Event", calendar_id=cal_id)
+        )
         calendar_management_client.delete_calendar(cal_id, on_destroy_remove_events=True)
         calendars = calendar_management_client.get_calendars()
         assert not any(c.id == cal_id for c in calendars)
@@ -580,8 +603,8 @@ class TestJMAPCalendarManagementIntegration:
             calendar_management_client.share_calendar(
                 cal_id, second_account_id, {"mayReadItems": True, "mayWriteAll": True}
             )
-            event_id = calendar_management_client.create_event(
-                cal_id, _minimal_ical("Owner Created Event")
+            event_id, _, _ = calendar_management_client.create_event(
+                cal_id, _minimal_event("Owner Created Event", calendar_id=cal_id)
             )
 
             second_view = second_account_client.get_calendars(account_id=owner_account_id)
@@ -629,7 +652,9 @@ class TestJMAPSchedulingIntegration:
         try:
             calendar_management_client.share_calendar(cal_id, second_account_id, _SCHEDULING_RIGHTS)
             ical = _invite_ical(owner_email, second_account_email, title="Accept Me")
-            event_id = calendar_management_client.send_invite(cal_id, ical)
+            event_id, _, _ = calendar_management_client.send_invite(
+                cal_id, ical_to_jscal(ical, calendar_id=cal_id)
+            )
 
             second_account_client.accept_invitation(
                 event_id, second_account_email, account_id=owner_account_id
@@ -658,7 +683,9 @@ class TestJMAPSchedulingIntegration:
         try:
             calendar_management_client.share_calendar(cal_id, second_account_id, _SCHEDULING_RIGHTS)
             ical = _invite_ical(owner_email, second_account_email, title="Decline Me")
-            event_id = calendar_management_client.send_invite(cal_id, ical)
+            event_id, _, _ = calendar_management_client.send_invite(
+                cal_id, ical_to_jscal(ical, calendar_id=cal_id)
+            )
 
             second_account_client.decline_invitation(
                 event_id, second_account_email, account_id=owner_account_id
@@ -683,7 +710,9 @@ class TestJMAPSchedulingIntegration:
         try:
             calendar_management_client.share_calendar(cal_id, second_account_id, _SCHEDULING_RIGHTS)
             ical = _invite_ical(owner_email, second_account_email, title="Maybe Me")
-            event_id = calendar_management_client.send_invite(cal_id, ical)
+            event_id, _, _ = calendar_management_client.send_invite(
+                cal_id, ical_to_jscal(ical, calendar_id=cal_id)
+            )
 
             second_account_client.tentatively_accept(
                 event_id, second_account_email, account_id=owner_account_id
@@ -699,7 +728,9 @@ class TestJMAPSchedulingIntegration:
     ):
         cal_id = calendar_management_client.create_calendar("No Participant Calendar")
         try:
-            event_id = calendar_management_client.create_event(cal_id, _minimal_ical("Solo Event"))
+            event_id, _, _ = calendar_management_client.create_event(
+                cal_id, _minimal_event("Solo Event", calendar_id=cal_id)
+            )
             with pytest.raises(JMAPMethodError) as exc_info:
                 calendar_management_client.accept_invitation(event_id, "nobody@example.invalid")
             assert exc_info.value.error_type == "notFound"
@@ -725,7 +756,9 @@ class TestJMAPSchedulingIntegration:
         try:
             calendar_management_client.share_calendar(cal_id, second_account_id, _SCHEDULING_RIGHTS)
             ical = _invite_ical(owner_email, second_account_email, title="Cancel Me")
-            event_id = calendar_management_client.send_invite(cal_id, ical)
+            event_id, _, _ = calendar_management_client.send_invite(
+                cal_id, ical_to_jscal(ical, calendar_id=cal_id)
+            )
             second_account_client.accept_invitation(
                 event_id, second_account_email, account_id=owner_account_id
             )
@@ -758,7 +791,9 @@ class TestJMAPSchedulingIntegration:
         try:
             calendar_management_client.share_calendar(cal_id, second_account_id, _SCHEDULING_RIGHTS)
             ical = _invite_ical(owner_email, second_account_email, title="Propose New Time")
-            event_id = calendar_management_client.send_invite(cal_id, ical)
+            event_id, _, _ = calendar_management_client.send_invite(
+                cal_id, ical_to_jscal(ical, calendar_id=cal_id)
+            )
             second_account_client.accept_invitation(
                 event_id, second_account_email, account_id=owner_account_id
             )
@@ -769,7 +804,9 @@ class TestJMAPSchedulingIntegration:
                 title="Propose New Time",
                 start=datetime(2030, 6, 1, 15, 0, tzinfo=timezone.utc),
             )
-            second_account_client.update_event(event_id, proposed, account_id=owner_account_id)
+            second_account_client.update_event(
+                event_id, ical_to_jscal(proposed), account_id=owner_account_id
+            )
 
             updated = calendar_management_client.get_event(event_id)
             assert updated.get_data()["start"] == "2030-06-01T15:00:00", (
@@ -790,14 +827,14 @@ class TestJMAPSchedulingIntegration:
             pytest.skip("Stalwart does not increment sequence on CalendarEvent/set update")
         cal_id = calendar_management_client.create_calendar("Sequence Integration Calendar")
         try:
-            event_id = calendar_management_client.create_event(
-                cal_id, _minimal_ical("Sequence Start")
+            event_id, _, _ = calendar_management_client.create_event(
+                cal_id, _minimal_event("Sequence Start", calendar_id=cal_id)
             )
             before = calendar_management_client.get_event(event_id)
             sequence_before = before.get_data().get("sequence", 0)
 
             calendar_management_client.update_event(
-                event_id, _minimal_ical("Sequence Changed Title")
+                event_id, _minimal_event("Sequence Changed Title")
             )
 
             after = calendar_management_client.get_event(event_id)
@@ -837,7 +874,9 @@ def _stale_state_after_bystander_write(
     it, not just the one it's actually testing.
     """
     stale_state = event_client.get_sync_token()
-    other_event_id = event_client.create_event(calendar_id, _minimal_ical(bystander_title))
+    other_event_id, _, _ = event_client.create_event(
+        calendar_id, _minimal_event(bystander_title, calendar_id=calendar_id)
+    )
     return stale_state, other_event_id
 
 
@@ -850,19 +889,24 @@ class TestJMAPEventIntegration:
         assert "BEGIN:VCALENDAR" in ical
 
     def test_event_update(self, event_client, event_created_id):
-        event_client.update_event(event_created_id, _minimal_ical("Updated Title"))
+        event_client.update_event(event_created_id, _minimal_event("Updated Title"))
         obj = event_client.get_event(event_created_id)
         assert "Updated Title" in jscal_to_ical(obj.get_data())
 
     def test_event_delete(self, event_client, event_calendar_id):
-        event_id = event_client.create_event(event_calendar_id, _minimal_ical("To Be Deleted"))
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("To Be Deleted", calendar_id=event_calendar_id),
+        )
         event_client.delete_event(event_id)
         with pytest.raises(JMAPMethodError):
             event_client.get_event(event_id)
 
     def test_event_query_time_range(self, event_client, event_calendar_id):
         title = "Query Range Test Event"
-        event_id = event_client.create_event(event_calendar_id, _minimal_ical(title))
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, _minimal_event(title, calendar_id=event_calendar_id)
+        )
         try:
             results = event_client.search_events(
                 calendar_id=event_calendar_id,
@@ -876,7 +920,10 @@ class TestJMAPEventIntegration:
 
     def test_event_sync(self, event_client, event_calendar_id):
         token_before = event_client.get_sync_token()
-        event_id = event_client.create_event(event_calendar_id, _minimal_ical("Sync Test Event"))
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Sync Test Event", calendar_id=event_calendar_id),
+        )
         try:
             added, _modified, _deleted, old_state, _new_state, _has_more = (
                 event_client.get_objects_by_sync_token(token_before)
@@ -897,8 +944,9 @@ class TestJMAPEventIntegration:
     def test_get_objects_by_sync_token_uses_given_account_id(self, event_client, event_calendar_id):
         session_account_id = event_client._get_session().account_id
         token_before = event_client.get_sync_token(account_id=session_account_id)
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("Account Scoped Sync Test Event")
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Account Scoped Sync Test Event", calendar_id=event_calendar_id),
         )
         try:
             added, _modified, _deleted, old_state, _new_state, _has_more = (
@@ -912,14 +960,15 @@ class TestJMAPEventIntegration:
             event_client.delete_event(event_id)
 
     def test_update_event_with_correct_if_in_state_succeeds(self, event_client, event_calendar_id):
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("ifInState Success Test Event")
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("ifInState Success Test Event", calendar_id=event_calendar_id),
         )
         try:
             current_state = event_client.get_sync_token()
             event_client.update_event(
                 event_id,
-                _minimal_ical("ifInState Success Test Event Updated"),
+                _minimal_event("ifInState Success Test Event Updated"),
                 if_in_state=current_state,
             )
             updated = jscal_to_ical(event_client.get_event(event_id).get_data())
@@ -935,8 +984,9 @@ class TestJMAPEventIntegration:
         confirmed here against a real server rather than only a mocked
         response, since this is the exact failure mode the calendaring-sync
         adapter depends on to detect a concurrent write."""
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("ifInState Mismatch Test Event")
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("ifInState Mismatch Test Event", calendar_id=event_calendar_id),
         )
         try:
             stale_state, other_event_id = _stale_state_after_bystander_write(
@@ -946,7 +996,7 @@ class TestJMAPEventIntegration:
                 with pytest.raises(JMAPMethodError) as exc_info:
                     event_client.update_event(
                         event_id,
-                        _minimal_ical("ifInState Mismatch Test Event Updated"),
+                        _minimal_event("ifInState Mismatch Test Event Updated"),
                         if_in_state=stale_state,
                     )
                 assert exc_info.value.error_type == "stateMismatch"
@@ -958,8 +1008,9 @@ class TestJMAPEventIntegration:
     def test_delete_event_with_stale_if_in_state_raises_state_mismatch(
         self, event_client, event_calendar_id
     ):
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("ifInState Delete Mismatch Test Event")
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("ifInState Delete Mismatch Test Event", calendar_id=event_calendar_id),
         )
         try:
             stale_state, other_event_id = _stale_state_after_bystander_write(
@@ -984,7 +1035,10 @@ class TestJMAPEventIntegration:
         recovers every change with none missed or duplicated."""
         token_before = event_client.get_sync_token()
         event_ids = [
-            event_client.create_event(event_calendar_id, _minimal_ical(f"Paged Sync Event {i}"))
+            event_client.create_event(
+                event_calendar_id,
+                _minimal_event(f"Paged Sync Event {i}", calendar_id=event_calendar_id),
+            )[0]
             for i in range(3)
         ]
         try:
@@ -1017,7 +1071,9 @@ class TestJMAPEventIntegration:
             title="Weekly Standup",
             start=datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc),
         )
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             obj = event_client.get_event(event_id)
             assert "recurrenceRule" in obj.get_data(), (
@@ -1026,7 +1082,7 @@ class TestJMAPEventIntegration:
             assert "RRULE" in jscal_to_ical(obj.get_data())
 
             updated_ical = ical.replace("Weekly Standup", "Weekly Standup Renamed")
-            event_client.update_event(event_id, updated_ical)
+            event_client.update_event(event_id, ical_to_jscal(updated_ical))
             updated = event_client.get_event(event_id)
             assert "recurrenceRule" in updated.get_data(), (
                 f"{server}: recurrence rule was lost after an unrelated update."
@@ -1037,13 +1093,37 @@ class TestJMAPEventIntegration:
 
     def test_ical_roundtrip(self, event_client, event_calendar_id):
         start = datetime(2026, 7, 15, 9, 0, 0, tzinfo=timezone.utc)
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("Roundtrip Event", start=start)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Roundtrip Event", start=start, calendar_id=event_calendar_id),
         )
         try:
             fetched = jscal_to_ical(event_client.get_event(event_id).get_data())
             assert "Roundtrip Event" in fetched
             assert "20260715" in fetched
+        finally:
+            event_client.delete_event(event_id)
+
+    def test_jscalendar_write_back_unchanged_round_trips(self, event_client, event_calendar_id):
+        """An event read as a JSCalendar dict and written back unchanged
+        comes back equal, with no iCalendar round trip in between to lose
+        properties either way. ``updated`` is excluded from the comparison:
+        confirmed live that Cyrus bumps it on every ``CalendarEvent/set``
+        call, including a no-op write, matching draft-ietf-jmap-calendars
+        section 5.9's "the server sets updated to the current time on
+        every create or update," not only on a change that alters
+        something."""
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Write Back Unchanged Event", calendar_id=event_calendar_id),
+        )
+        try:
+            original = event_client.get_event(event_id).get_data()
+            event_client.update_event(event_id, original)
+            refetched = event_client.get_event(event_id).get_data()
+            assert {k: v for k, v in refetched.items() if k != "updated"} == {
+                k: v for k, v in original.items() if k != "updated"
+            }
         finally:
             event_client.delete_event(event_id)
 
@@ -1059,7 +1139,9 @@ class TestJMAPEventIntegration:
             timedelta(hours=1),
             extra_lines="ATTACH;FMTTYPE=application/pdf:https://example.com/report.pdf\r\n",
         )
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             fetched = jscal_to_ical(event_client.get_event(event_id).get_data())
             if server == "cyrus":
@@ -1086,7 +1168,9 @@ class TestJMAPEventIntegration:
             timedelta(hours=1),
             extra_lines="URL:https://example.com/schedule.ics\r\n",
         )
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             fetched = jscal_to_ical(event_client.get_event(event_id).get_data())
             assert "URL:https://example.com/schedule.ics" in fetched
@@ -1116,14 +1200,18 @@ class TestJMAPEventIntegration:
         )
         if server == "cyrus":
             with pytest.raises(JMAPMethodError) as exc_info:
-                event_client.create_event(event_calendar_id, ical)
+                event_client.create_event(
+                    event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+                )
             assert exc_info.value.error_type == "invalidProperties", (
                 "cyrus: if this now accepts VirtualLocation.description, "
                 "Cyrus may have fixed this limitation; update this test "
                 "accordingly."
             )
             return
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             data = event_client.get_event(event_id).get_data()
             vloc = next(iter(data["virtualLocations"].values()))
@@ -1153,7 +1241,9 @@ class TestJMAPEventIntegration:
                 "CONFERENCE;VALUE=URI;FEATURE=PHONE:tel:+1-555-555-5555\r\n"
             ),
         )
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             obj = event_client.get_event(event_id)
             data = obj.get_data()
@@ -1214,7 +1304,9 @@ class TestJMAPEventIntegration:
                 "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n"
             ),
         )
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             obj = event_client.get_event(event_id)
             overrides = obj.get_data().get("recurrenceOverrides") or {}
@@ -1262,7 +1354,9 @@ class TestJMAPEventIntegration:
             master_extra_lines="LOCATION:Room 100\r\n",
             override_extra_lines="LOCATION:Room 200\r\n",
         )
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             obj = event_client.get_event(event_id)
             data = obj.get_data()
@@ -1309,8 +1403,9 @@ class TestJMAPFreeBusyIntegration:
     ):
         start = datetime(2026, 9, 21, 10, 0, 0, tzinfo=timezone.utc)
         session = event_client._get_session()
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("Availability Test Event", start=start)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Availability Test Event", start=start, calendar_id=event_calendar_id),
         )
         try:
             availability = event_client.get_availability(
@@ -1333,7 +1428,10 @@ class TestJMAPFreeBusyIntegration:
         title = "Details Test Event"
         start = datetime(2026, 9, 21, 14, 0, 0, tzinfo=timezone.utc)
         session = event_client._get_session()
-        event_id = event_client.create_event(event_calendar_id, _minimal_ical(title, start=start))
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event(title, start=start, calendar_id=event_calendar_id),
+        )
         try:
             availability = event_client.get_availability(
                 [session.account_id],
@@ -1366,7 +1464,9 @@ class TestJMAPFreeBusyIntegration:
             duration=timedelta(minutes=30),
         )
         session = event_client._get_session()
-        event_id = event_client.create_event(event_calendar_id, ical)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
+        )
         try:
             intervals = event_client._get_availability_via_fallback(
                 session.account_id, "2026-09-19T00:00:00", "2026-10-10T00:00:00"
@@ -1393,15 +1493,16 @@ class TestAsyncJMAPEventIntegration:
     @pytest.mark.asyncio
     async def test_event_update(self, async_client, async_created_event_id):
         await async_client.update_event(
-            async_created_event_id, _minimal_ical("Async Updated Title")
+            async_created_event_id, _minimal_event("Async Updated Title")
         )
         obj = await async_client.get_event(async_created_event_id)
         assert "Async Updated Title" in jscal_to_ical(obj.get_data())
 
     @pytest.mark.asyncio
     async def test_event_delete(self, async_client, async_calendar_id):
-        event_id = await async_client.create_event(
-            async_calendar_id, _minimal_ical("Async To Be Deleted")
+        event_id, _, _ = await async_client.create_event(
+            async_calendar_id,
+            _minimal_event("Async To Be Deleted", calendar_id=async_calendar_id),
         )
         await async_client.delete_event(event_id)
         with pytest.raises(JMAPMethodError):
@@ -1424,8 +1525,9 @@ class TestAsyncJMAPEventIntegration:
     @pytest.mark.asyncio
     async def test_event_sync(self, async_client, async_calendar_id):
         token_before = await async_client.get_sync_token()
-        event_id = await async_client.create_event(
-            async_calendar_id, _minimal_ical("Async Sync Test Event")
+        event_id, _, _ = await async_client.create_event(
+            async_calendar_id,
+            _minimal_event("Async Sync Test Event", calendar_id=async_calendar_id),
         )
         try:
             (
@@ -1444,8 +1546,9 @@ class TestAsyncJMAPEventIntegration:
     @pytest.mark.asyncio
     async def test_ical_roundtrip(self, async_client, async_calendar_id):
         start = datetime(2026, 7, 15, 9, 0, 0, tzinfo=timezone.utc)
-        event_id = await async_client.create_event(
-            async_calendar_id, _minimal_ical("Async Roundtrip Event", start=start)
+        event_id, _, _ = await async_client.create_event(
+            async_calendar_id,
+            _minimal_event("Async Roundtrip Event", start=start, calendar_id=async_calendar_id),
         )
         try:
             fetched = jscal_to_ical((await async_client.get_event(event_id)).get_data())
@@ -1460,8 +1563,11 @@ class TestAsyncJMAPEventIntegration:
     ):
         start = datetime(2026, 9, 21, 10, 0, 0, tzinfo=timezone.utc)
         session = await async_client._get_session()
-        event_id = await async_client.create_event(
-            async_calendar_id, _minimal_ical("Async Availability Test Event", start=start)
+        event_id, _, _ = await async_client.create_event(
+            async_calendar_id,
+            _minimal_event(
+                "Async Availability Test Event", start=start, calendar_id=async_calendar_id
+            ),
         )
         try:
             availability = await async_client.get_availability(
@@ -1506,8 +1612,9 @@ class TestAttachmentIntegration:
 
     def test_attach_to_event_persists_href(self, event_client, event_calendar_id, server):
         data = b"png-like binary content for attachment test"
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("Attachment Test Event")
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Attachment Test Event", calendar_id=event_calendar_id),
         )
         try:
             blob_id = event_client.upload_attachment(data, "application/octet-stream")
@@ -1532,8 +1639,9 @@ class TestAttachmentIntegration:
         JMAPAttachment.is_attachment), so it finds nothing here even though
         attach_to_event succeeded; Stalwart finds the attachment."""
         data = b"attachment content for get_event_attachments test"
-        event_id = event_client.create_event(
-            event_calendar_id, _minimal_ical("Attachment Filter Test Event")
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Attachment Filter Test Event", calendar_id=event_calendar_id),
         )
         try:
             blob_id = event_client.upload_attachment(data, "application/octet-stream")
@@ -1574,8 +1682,9 @@ class TestAsyncAttachmentIntegration:
         """Cyrus-only class; asserts on the raw links data rather than
         get_event_attachments, see test_get_event_attachments_empty_on_cyrus_due_to_rel_bug."""
         data = b"async binary content for attachment test"
-        event_id = await async_client.create_event(
-            async_calendar_id, _minimal_ical("Async Attachment Test Event")
+        event_id, _, _ = await async_client.create_event(
+            async_calendar_id,
+            _minimal_event("Async Attachment Test Event", calendar_id=async_calendar_id),
         )
         try:
             blob_id = await async_client.upload_attachment(data, "application/octet-stream")
@@ -1601,8 +1710,9 @@ class TestAsyncAttachmentIntegration:
         self, async_client, async_calendar_id
     ):
         """See TestAttachmentIntegration.test_get_event_attachments_finds_attachment."""
-        event_id = await async_client.create_event(
-            async_calendar_id, _minimal_ical("Async Attachment Filter Test Event")
+        event_id, _, _ = await async_client.create_event(
+            async_calendar_id,
+            _minimal_event("Async Attachment Filter Test Event", calendar_id=async_calendar_id),
         )
         try:
             blob_id = await async_client.upload_attachment(b"data", "application/octet-stream")
@@ -1896,7 +2006,9 @@ class TestRicherEventSearchIntegration:
     def test_has_attachment_true_finds_event_with_attachment(
         self, event_client, event_calendar_id, server
     ):
-        event_id = event_client.create_event(event_calendar_id, _attachment_ical())
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(_attachment_ical(), calendar_id=event_calendar_id)
+        )
         try:
             results = event_client.search_events(
                 calendar_id=event_calendar_id, has_attachment=True
@@ -1920,7 +2032,9 @@ class TestRicherEventSearchIntegration:
     ):
         if server == "cyrus":
             pytest.skip("Cyrus drops rel: enclosure, so this event never registers as attached")
-        event_id = event_client.create_event(event_calendar_id, _attachment_ical())
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id, ical_to_jscal(_attachment_ical(), calendar_id=event_calendar_id)
+        )
         try:
             results = event_client.search_events(
                 calendar_id=event_calendar_id, has_attachment=False
@@ -1937,9 +2051,12 @@ class TestRicherEventSearchIntegration:
         participant_role together instead of three near-identical
         create/search/delete sequences."""
         chair_email = "chair-filter-test@example.com"
-        event_id = event_client.create_event(
+        event_id, _, _ = event_client.create_event(
             event_calendar_id,
-            _invite_ical(owner_email, chair_email, role="CHAIR", partstat="ACCEPTED"),
+            ical_to_jscal(
+                _invite_ical(owner_email, chair_email, role="CHAIR", partstat="ACCEPTED"),
+                calendar_id=event_calendar_id,
+            ),
         )
         try:
             by_email = event_client.search_events(
@@ -1971,8 +2088,9 @@ class TestRicherEventSearchIntegration:
         assertion should start failing, not silently pass, the day either
         server stops doing that."""
         attendee_email = "attendee-role-gap-test@example.com"
-        event_id = event_client.create_event(
-            event_calendar_id, _invite_ical(owner_email, attendee_email)
+        event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            ical_to_jscal(_invite_ical(owner_email, attendee_email), calendar_id=event_calendar_id),
         )
         try:
             results = event_client.search_events(
@@ -1997,7 +2115,10 @@ class TestRicherEventSearchIntegration:
         actually passed, not merely whether the server happened to include
         one."""
         event_ids = [
-            event_client.create_event(event_calendar_id, _minimal_ical(f"Paged Search Event {i}"))
+            event_client.create_event(
+                event_calendar_id,
+                _minimal_event(f"Paged Search Event {i}", calendar_id=event_calendar_id),
+            )[0]
             for i in range(3)
         ]
         try:

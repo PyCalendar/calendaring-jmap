@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast, overload
 
 from calendaring_jmap.constants import UTC_DATETIME_FORMAT
+from calendaring_jmap.convert import ical_to_jscal
 from calendaring_jmap.objects.calendar_object import JMAPCalendarObject
 
 if TYPE_CHECKING:
@@ -316,14 +317,21 @@ class JMAPCalendar(Generic[_M]):
 
         Raises:
             JMAPMethodError: If the server rejects the create request.
-            ValueError: Same conditions as
-                :meth:`~calendaring_jmap.client.JMAPClient.create_event`.
+            ValueError: If ``ical_str`` is malformed in a way ``ical_to_jscal``
+                rejects (missing ``UID``/``DTSTART``, a negative duration,
+                mismatched ``DTSTART``/``DTEND`` value types).
         """
         if self._is_async:
             return self._async_add_event(ical_str)
-        return self._bound_client.create_event(self.id, ical_str, account_id=self._account_id)
+        jscal = ical_to_jscal(ical_str, calendar_id=self.id)
+        event_id, _, _ = self._bound_client.create_event(
+            self.id, jscal, account_id=self._account_id
+        )
+        return event_id
 
     async def _async_add_event(self: JMAPCalendar[Literal[True]], ical_str: str) -> str:
-        return await self._bound_async_client.create_event(
-            self.id, ical_str, account_id=self._account_id
+        jscal = ical_to_jscal(ical_str, calendar_id=self.id)
+        event_id, _, _ = await self._bound_async_client.create_event(
+            self.id, jscal, account_id=self._account_id
         )
+        return event_id

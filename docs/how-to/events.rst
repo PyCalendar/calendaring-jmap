@@ -5,7 +5,7 @@
 Work with events
 ================
 
-Events are passed as iCalendar strings, so existing iCalendar-producing code works unchanged.
+:meth:`~calendaring_jmap.objects.calendar.JMAPCalendar.add_event` and :meth:`~calendaring_jmap.objects.calendar_object.JMAPCalendarObject.save` take and produce iCalendar strings, so existing iCalendar-producing code works unchanged through them. The lower-level client methods (:meth:`~calendaring_jmap.client.JMAPClient.create_event`, :meth:`~calendaring_jmap.client.JMAPClient.send_invite`, :meth:`~calendaring_jmap.client.JMAPClient.update_event`) take a JSCalendar dict directly instead, the same shape :meth:`~calendaring_jmap.client.JMAPClient.get_event` hands back; convert with ``ical_to_jscal`` first if you're starting from iCalendar.
 
 Add an event
 ============
@@ -61,11 +61,11 @@ Edit the object in place, then call :meth:`~calendaring_jmap.objects.calendar_ob
 
 ``save()`` needs an object with its ``parent`` calendar set, since it uses that calendar's client to send the update. Objects from ``cal.get_object_by_uid`` and :meth:`~calendaring_jmap.objects.calendar.JMAPCalendar.search` have it set; objects from :meth:`~calendaring_jmap.client.JMAPClient.get_event` don't, since they aren't fetched through a calendar. It's also sync-only; on an async-backed calendar, call :meth:`~calendaring_jmap.async_client.AsyncJMAPClient.update_event` directly instead.
 
-If you already have a full replacement iCalendar string, ``update_event`` also works directly on the client:
+If you already have a full replacement iCalendar string, ``update_event`` also works directly on the client, once converted:
 
 .. code-block:: python
 
-    client.update_event(event_id, updated_ical_str)
+    client.update_event(event_id, ical_to_jscal(updated_ical_str))
 
 Delete an event
 ===============

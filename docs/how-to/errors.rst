@@ -20,7 +20,7 @@ Catch specific error types
     )
 
     try:
-        event_id = client.create_event(calendar_id, ical)
+        event_id, old_state, new_state = client.create_event(calendar_id, event)
     except JMAPAuthError:
         print("Authentication failed (401/403)")
     except JMAPCapabilityError:
@@ -35,12 +35,12 @@ See :doc:`../reference/errors` for what each error class means and the full list
 Malformed iCalendar input
 =========================
 
-``create_event``, ``send_invite``, ``update_event``, and the calendar/object convenience methods that call them (``JMAPCalendar.add_event``, ``JMAPCalendarObject.save``) convert your iCalendar string to JSCalendar before sending it. If it's missing a mandatory property (``UID``, ``DTSTART``) or has a negative duration, they raise a plain ``ValueError``, not a ``JMAPError`` subclass. This happens client-side, before any request reaches the server. Catch it if you're constructing iCalendar strings by hand rather than passing through data a server already returned to you:
+``create_event``, ``send_invite``, and ``update_event`` take a JSCalendar dict directly and raise nothing client-side on a malformed one; whether a missing required property comes back as the server's own ``invalidProperties`` (surfaced as :class:`~calendaring_jmap.error.JMAPMethodError`) depends on the server and the property. Confirmed live that Cyrus rejects a create missing ``uid``/``start`` with ``invalidProperties``, while Stalwart accepts it, generating its own ``uid`` and leaving the event with no ``start`` at all rather than rejecting the request. The ``ValueError`` case below applies to ``ical_to_jscal`` itself, and so to ``JMAPCalendar.add_event``/``JMAPCalendarObject.save``, which call it on your behalf: if the iCalendar string is missing a mandatory property (``UID``, ``DTSTART``) or has a negative duration, conversion raises a plain ``ValueError`` before any request reaches the server. Catch it if you're constructing iCalendar strings by hand rather than passing through data a server already returned to you:
 
 .. code-block:: python
 
     try:
-        event_id = client.create_event(calendar_id, ical)
+        event_id = cal.add_event(ical)
     except ValueError as e:
         print(f"Malformed iCalendar: {e}")
     except JMAPMethodError as e:
