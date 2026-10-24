@@ -1,0 +1,1 @@
+Fixed ``docs/how-to/sync.rst`` and ``docs/how-to/example-sync-cache.rst``, which still unpacked ``get_objects_by_sync_token``'s old 4-tuple and described the removed ``serverPartialFail`` exception. The sync-cache example also kept its sync token per calendar; fixed to key it per account, since JMAP state covers the whole account, not one calendar.
