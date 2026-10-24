@@ -1,0 +1,1 @@
+Now requires ``wassima>=2.1.5``, which drops the compromised eMudhra emSign root certificates from its embedded fallback bundle. CI also installs pip 26.2.2 in every job and publishes to PyPI with ``gh-action-pypi-publish`` v1.14.3, both fixes for the same incident.
