@@ -1,0 +1,1 @@
+``create_event``/``send_invite`` now accept ``calendar_id=None`` to send an event's own ``calendarIds`` unchanged, instead of always overwriting it down to one calendar. Raises ``ValueError`` if the event has no ``calendarIds`` at all.

@@ -437,7 +437,7 @@ class AsyncJMAPClient(_JMAPClientBase):
 
     async def _create_event_impl(
         self,
-        calendar_id: str,
+        calendar_id: str | None,
         event: dict,
         account_id: str | None,
         send_scheduling_messages: bool,
@@ -445,7 +445,7 @@ class AsyncJMAPClient(_JMAPClientBase):
     ) -> tuple[str, str, str]:
         session = await self._get_session()
         jscal = self._strip_server_managed_event_properties(event)
-        jscal["calendarIds"] = {calendar_id: True}
+        self._resolve_create_calendar_ids(jscal, calendar_id)
         target_account = self._resolve_account(session, account_id)
         call = build_event_set_create(
             target_account,
@@ -462,7 +462,7 @@ class AsyncJMAPClient(_JMAPClientBase):
 
     async def create_event(
         self,
-        calendar_id: str,
+        calendar_id: str | None,
         event: dict,
         account_id: str | None = None,
         if_in_state: str | None = None,
@@ -470,14 +470,20 @@ class AsyncJMAPClient(_JMAPClientBase):
         """Create a calendar event from a JSCalendar dict.
 
         Args:
-            calendar_id: The JMAP calendar ID to create the event in.
+            calendar_id: The JMAP calendar ID to create the event in. If
+                given, overwrites ``event``'s own ``calendarIds`` with
+                this one calendar, replacing whatever it already had. If
+                ``None``, ``event``'s own ``calendarIds`` is sent
+                unchanged, so an event genuinely belonging to more than
+                one calendar keeps all of them; confirmed live that
+                Stalwart accepts this, while Cyrus rejects a create
+                naming more than one calendar with
+                ``invalidProperties``/``properties: ["calendarIds"]``.
             event: A JSCalendar CalendarEvent dict (:rfc:`8984#section-2.1`),
                 e.g. one returned by :meth:`get_event`. Not mutated: a copy is made
                 before ``id``, ``baseEventId``, and ``isOrigin`` are stripped,
                 since draft-ietf-jmap-calendars documents all three as
-                server-set and immutable, and ``calendarIds`` is overwritten
-                with ``calendar_id``, replacing whatever calendar membership
-                ``event`` already had.
+                server-set and immutable.
             account_id: The account owning ``calendar_id``; pass the owner's
                 account here to add an event to a calendar shared with you
                 (see ``get_calendars(account_id=...)``).
@@ -499,6 +505,8 @@ class AsyncJMAPClient(_JMAPClientBase):
 
         Raises:
             JMAPMethodError: If the server rejects the create request.
+            ValueError: If ``calendar_id`` is ``None`` and ``event`` has
+                no ``calendarIds``, or an empty one.
         """
         return await self._create_event_impl(
             calendar_id,
@@ -510,7 +518,7 @@ class AsyncJMAPClient(_JMAPClientBase):
 
     async def send_invite(
         self,
-        calendar_id: str,
+        calendar_id: str | None,
         event: dict,
         account_id: str | None = None,
         if_in_state: str | None = None,
@@ -525,6 +533,7 @@ class AsyncJMAPClient(_JMAPClientBase):
 
         Args:
             calendar_id: The JMAP calendar ID to create the event in.
+                See :meth:`create_event` for ``None``'s meaning.
             event: A JSCalendar CalendarEvent dict. See :meth:`create_event`.
             account_id: The account owning ``calendar_id``, same as
                 :meth:`create_event`.
@@ -537,6 +546,7 @@ class AsyncJMAPClient(_JMAPClientBase):
             JMAPMethodError: If the server rejects the create request, or
                 with ``error_type == "noSupportedScheduleMethods"`` if a
                 participant has no usable delivery method.
+            ValueError: Same condition as :meth:`create_event`.
         """
         return await self._create_event_impl(
             calendar_id,
@@ -1119,7 +1129,7 @@ class AsyncJMAPClient(_JMAPClientBase):
         account_id: str | None = None,
         send_scheduling_messages: bool = False,
         if_in_state: str | None = None,
-    ) -> None:
+    ) -> tuple[str, str]:
         """Delete a calendar event.
 
         Args:
@@ -1137,6 +1147,10 @@ class AsyncJMAPClient(_JMAPClientBase):
                 (:rfc:`8620#section-5.3`). The state covers every event in
                 the account, not just this one. ``None`` applies
                 unconditionally.
+
+        Returns:
+            A 2-tuple ``(old_state, new_state)``. See
+            :meth:`~calendaring_jmap.client.JMAPClient.delete_event`.
 
         Raises:
             JMAPMethodError: If the server rejects the delete.
@@ -1156,6 +1170,7 @@ class AsyncJMAPClient(_JMAPClientBase):
         self._parse_delete_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set, event_id
         )
+        return self._parse_set_state(responses, "CalendarEvent/set")
 
     async def _get_object_by_uid(
         self,

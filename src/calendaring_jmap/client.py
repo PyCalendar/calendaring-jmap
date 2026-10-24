@@ -277,10 +277,21 @@ class _JMAPClientBase:
 
     @staticmethod
     def _raise_set_error(api_url: str, err: dict) -> None:
+        """Raise a ``JMAPMethodError`` for one ``SetError`` from a
+        ``notCreated``/``notUpdated``/``notDestroyed`` map.
+
+        ``properties`` is read unconditionally from ``err``, not only when
+        ``type == "invalidProperties"``: :rfc:`8620#section-5.3` leaves
+        room for other ``SetError`` types to carry method-specific fields
+        of their own, so gating on one hardcoded type would silently drop
+        a field this client doesn't yet know the name of. Absent, it
+        stays ``None`` on the raised error.
+        """
         raise JMAPMethodError(
             url=api_url,
             reason=f"set failed: {err}",
             error_type=err.get("type", _DEFAULT_ERROR_TYPE),
+            properties=err.get("properties"),
         )
 
     @staticmethod
@@ -477,6 +488,39 @@ class _JMAPClientBase:
         for key in ("id", "baseEventId", "isOrigin"):
             copy.pop(key, None)
         return copy
+
+    @staticmethod
+    def _resolve_create_calendar_ids(jscal: dict, calendar_id: str | None) -> None:
+        """Set ``jscal["calendarIds"]`` in place for a ``CalendarEvent/set`` create.
+
+        ``calendar_id`` given: overwrites ``calendarIds`` with that one
+        calendar, same as every release before this one. ``None``: leaves
+        ``jscal``'s own ``calendarIds`` as the caller built it, so a dict
+        that genuinely belongs to more than one calendar keeps all of
+        them; confirmed live that Stalwart accepts a create with two real
+        calendar ids in ``calendarIds`` at once, while Cyrus rejects it
+        with ``invalidProperties``/``properties: ["calendarIds"]``, a
+        per-server difference this client passes through rather than
+        working around.
+
+        Raises:
+            ValueError: If ``calendar_id`` is ``None`` and ``jscal`` has no
+                ``calendarIds`` key, an empty one, or ``None``.
+                draft-ietf-jmap-calendars documents an event as belonging
+                to one or more calendars at all times; confirmed live both
+                servers reject a create with ``calendarIds`` absent, empty,
+                or explicitly ``null`` the same way,
+                ``invalidProperties``/``properties: ["calendarIds"]``, so
+                this raises before sending a request either server would
+                reject anyway.
+        """
+        if calendar_id is not None:
+            jscal["calendarIds"] = {calendar_id: True}
+        elif not jscal.get("calendarIds"):
+            raise ValueError(
+                "event has no calendarIds and calendar_id was not given; "
+                "an event must belong to at least one calendar"
+            )
 
     @staticmethod
     def _build_event_update_patch(event: dict) -> tuple[dict, frozenset[str]]:
@@ -1462,7 +1506,7 @@ class JMAPClient(_JMAPClientBase):
 
     def _create_event_impl(
         self,
-        calendar_id: str,
+        calendar_id: str | None,
         event: dict,
         account_id: str | None,
         send_scheduling_messages: bool,
@@ -1470,7 +1514,7 @@ class JMAPClient(_JMAPClientBase):
     ) -> tuple[str, str, str]:
         session = self._get_session()
         jscal = self._strip_server_managed_event_properties(event)
-        jscal["calendarIds"] = {calendar_id: True}
+        self._resolve_create_calendar_ids(jscal, calendar_id)
         target_account = self._resolve_account(session, account_id)
         call = build_event_set_create(
             target_account,
@@ -1487,7 +1531,7 @@ class JMAPClient(_JMAPClientBase):
 
     def create_event(
         self,
-        calendar_id: str,
+        calendar_id: str | None,
         event: dict,
         account_id: str | None = None,
         if_in_state: str | None = None,
@@ -1495,14 +1539,20 @@ class JMAPClient(_JMAPClientBase):
         """Create a calendar event from a JSCalendar dict.
 
         Args:
-            calendar_id: The JMAP calendar ID to create the event in.
+            calendar_id: The JMAP calendar ID to create the event in. If
+                given, overwrites ``event``'s own ``calendarIds`` with
+                this one calendar, replacing whatever it already had. If
+                ``None``, ``event``'s own ``calendarIds`` is sent
+                unchanged, so an event genuinely belonging to more than
+                one calendar keeps all of them; confirmed live that
+                Stalwart accepts this, while Cyrus rejects a create
+                naming more than one calendar with
+                ``invalidProperties``/``properties: ["calendarIds"]``.
             event: A JSCalendar CalendarEvent dict (:rfc:`8984#section-2.1`),
                 e.g. one returned by :meth:`get_event`. Not mutated: a copy is made
                 before ``id``, ``baseEventId``, and ``isOrigin`` are stripped,
                 since draft-ietf-jmap-calendars documents all three as
-                server-set and immutable, and ``calendarIds`` is overwritten
-                with ``calendar_id``, replacing whatever calendar membership
-                ``event`` already had.
+                server-set and immutable.
             account_id: The account owning ``calendar_id``; pass the owner's
                 account here to add an event to a calendar shared with you
                 (see ``get_calendars(account_id=...)``).
@@ -1524,6 +1574,8 @@ class JMAPClient(_JMAPClientBase):
 
         Raises:
             JMAPMethodError: If the server rejects the create request.
+            ValueError: If ``calendar_id`` is ``None`` and ``event`` has
+                no ``calendarIds``, or an empty one.
         """
         return self._create_event_impl(
             calendar_id,
@@ -1535,7 +1587,7 @@ class JMAPClient(_JMAPClientBase):
 
     def send_invite(
         self,
-        calendar_id: str,
+        calendar_id: str | None,
         event: dict,
         account_id: str | None = None,
         if_in_state: str | None = None,
@@ -1550,6 +1602,7 @@ class JMAPClient(_JMAPClientBase):
 
         Args:
             calendar_id: The JMAP calendar ID to create the event in.
+                See :meth:`create_event` for ``None``'s meaning.
             event: A JSCalendar CalendarEvent dict. See :meth:`create_event`.
             account_id: The account owning ``calendar_id``, same as
                 :meth:`create_event`.
@@ -1562,6 +1615,7 @@ class JMAPClient(_JMAPClientBase):
             JMAPMethodError: If the server rejects the create request, or
                 with ``error_type == "noSupportedScheduleMethods"`` if a
                 participant has no usable delivery method.
+            ValueError: Same condition as :meth:`create_event`.
         """
         return self._create_event_impl(
             calendar_id,
@@ -2535,7 +2589,7 @@ class JMAPClient(_JMAPClientBase):
         account_id: str | None = None,
         send_scheduling_messages: bool = False,
         if_in_state: str | None = None,
-    ) -> None:
+    ) -> tuple[str, str]:
         """Delete a calendar event.
 
         Args:
@@ -2553,6 +2607,14 @@ class JMAPClient(_JMAPClientBase):
                 (:rfc:`8620#section-5.3`). The state covers every event in
                 the account, not just this one. ``None`` applies
                 unconditionally.
+
+        Returns:
+            A 2-tuple ``(old_state, new_state)``, the account's state
+            immediately before and after this delete (:rfc:`8620#section-5.3`),
+            confirmed live present on every ``CalendarEvent/set`` response
+            on both Cyrus and Stalwart. Pass ``new_state`` as a later
+            call's ``if_in_state`` to require that no other write has
+            landed since.
 
         Raises:
             JMAPMethodError: If the server rejects the delete.
@@ -2572,6 +2634,7 @@ class JMAPClient(_JMAPClientBase):
         self._parse_delete_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set, event_id
         )
+        return self._parse_set_state(responses, "CalendarEvent/set")
 
     def _get_object_by_uid(
         self,

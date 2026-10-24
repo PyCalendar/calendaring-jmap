@@ -1025,6 +1025,69 @@ class TestJMAPEventIntegration:
         finally:
             event_client.delete_event(event_id)
 
+    def test_delete_event_returns_state_chainable_into_next_write(
+        self, event_client, event_calendar_id
+    ):
+        """calendaring-sync's adapter chains each write's if_in_state from
+        the previous write's new_state; a delete must participate in that
+        chain the same way create/update already do."""
+        event_id, _, delete_target_state = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Delete State Chain Test Event", calendar_id=event_calendar_id),
+        )
+        _, new_state = event_client.delete_event(event_id, if_in_state=delete_target_state)
+
+        next_event_id, _, _ = event_client.create_event(
+            event_calendar_id,
+            _minimal_event("Delete State Chain Next Event", calendar_id=event_calendar_id),
+            if_in_state=new_state,
+        )
+        event_client.delete_event(next_event_id)
+
+    def test_create_event_duplicate_uid_error_carries_properties(
+        self, event_client, event_calendar_id
+    ):
+        event = _minimal_event("Duplicate UID Test Event", calendar_id=event_calendar_id)
+        event_id, _, _ = event_client.create_event(event_calendar_id, event)
+        try:
+            with pytest.raises(JMAPMethodError) as exc_info:
+                event_client.create_event(event_calendar_id, event)
+            assert exc_info.value.error_type == "invalidProperties"
+            assert exc_info.value.properties == ["uid"]
+        finally:
+            event_client.delete_event(event_id)
+
+    def test_create_event_calendar_id_none_preserves_multi_calendar_membership(
+        self, event_client, event_calendar_id, server
+    ):
+        """Confirmed live this session: Stalwart accepts a create naming
+        two real calendars in calendarIds at once; Cyrus rejects it with
+        invalidProperties. calendar_id=None must pass the caller's own
+        calendarIds through unchanged either way, not silently collapse
+        it to one calendar the way calendar_id=<str> always has."""
+        second_calendar_id = event_client.create_calendar("Second Calendar For Multi-Cal Test")
+        try:
+            event = _minimal_event("Multi Calendar Test Event")
+            event["calendarIds"] = {event_calendar_id: True, second_calendar_id: True}
+
+            if server == "stalwart":
+                event_id, _, _ = event_client.create_event(None, event)
+                try:
+                    fetched = event_client.get_event(event_id)
+                    assert fetched.get_data()["calendarIds"] == {
+                        event_calendar_id: True,
+                        second_calendar_id: True,
+                    }
+                finally:
+                    event_client.delete_event(event_id)
+            else:
+                with pytest.raises(JMAPMethodError) as exc_info:
+                    event_client.create_event(None, event)
+                assert exc_info.value.error_type == "invalidProperties"
+                assert exc_info.value.properties == ["calendarIds"]
+        finally:
+            event_client.delete_calendar(second_calendar_id)
+
     def test_get_objects_by_sync_token_pages_with_max_changes(
         self, event_client, event_calendar_id
     ):

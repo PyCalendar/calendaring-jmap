@@ -126,6 +126,28 @@ class JMAPMethodError(JMAPError):
     Individual methods define further, method-specific error types beyond
     this generic set (e.g. ``notFound``, ``calendarHasEvent``,
     ``expandDurationTooLarge``); see each method builder's own docstring.
+
+    Attributes:
+        properties: The failing properties named by a ``SetError``
+            (:rfc:`8620#section-5.3`), or ``None`` for an error with no
+            such list. The RFC documents this field only for
+            ``invalidProperties``, and as a SHOULD there too, so a server
+            may omit it even then; confirmed live that a method-level
+            error such as ``stateMismatch`` never has one at all, since it
+            aborts the whole call before any per-object ``SetError`` is
+            produced.
     """
 
     error_type = _DEFAULT_ERROR_TYPE
+    properties: list[str] | None = None
+
+    def __init__(
+        self,
+        url: str | None = None,
+        reason: str | None = None,
+        error_type: str | None = None,
+        properties: list[str] | None = None,
+    ) -> None:
+        super().__init__(url=url, reason=reason, error_type=error_type)
+        if properties is not None:
+            self.properties = properties

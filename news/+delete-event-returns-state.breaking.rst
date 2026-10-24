@@ -1,0 +1,1 @@
+``delete_event`` now returns ``(old_state, new_state)`` instead of ``None``, matching ``create_event``/``update_event``. Both Cyrus and Stalwart already send this on every destroy; it was just being discarded.
