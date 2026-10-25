@@ -236,6 +236,14 @@ class AsyncJMAPClient(_JMAPClientBase):
 
         return method_responses
 
+    async def get_account_id(self) -> str:
+        """Return the session's default account id.
+
+        See :meth:`~calendaring_jmap.client.JMAPClient.get_account_id`.
+        """
+        session = await self._get_session()
+        return session.account_id
+
     async def get_calendars(
         self, account_id: str | None = None
     ) -> list[JMAPCalendar[Literal[True]]]:

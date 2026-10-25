@@ -1,0 +1,1 @@
+``JMAPClient``/``AsyncJMAPClient`` now have a public ``get_account_id()``, returning the session's default account id. Fetches the session on first call if it isn't cached yet, the same as any other method here.

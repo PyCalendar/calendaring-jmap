@@ -1963,6 +1963,22 @@ class TestJMAPClientBaseParsers:
         client._get_session()
         mock_fetch.assert_called_once()
 
+    def test_get_account_id_returns_cached_session_account_id(self, monkeypatch):
+        client = _make_client()
+        mock_fetch = MagicMock()
+        monkeypatch.setattr("calendaring_jmap.client.fetch_session", mock_fetch)
+        assert client.get_account_id() == _USERNAME
+        mock_fetch.assert_not_called()
+
+    def test_get_account_id_fetches_session_on_first_call(self, monkeypatch):
+        client = JMAPClient(url=_JMAP_URL, username=_USERNAME, password=_PASSWORD)
+        fetched = Session(api_url=_API_URL, account_id="fetched-account", state="s")
+        mock_fetch = MagicMock(return_value=fetched)
+        monkeypatch.setattr("calendaring_jmap.client.fetch_session", mock_fetch)
+        assert client.get_account_id() == "fetched-account"
+        mock_fetch.assert_called_once()
+        assert client._session_cache is fetched
+
 
 class TestEventSearchFilters:
     """Direct unit tests for the two static helpers search_events's
@@ -10361,6 +10377,24 @@ class TestAsyncJMAPClient:
         assert client._session_cache is fetched
         await client._get_session()
         mock_fetch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_get_account_id_returns_cached_session_account_id(self, monkeypatch):
+        client = self._make_client()
+        mock_fetch = AsyncMock()
+        monkeypatch.setattr("calendaring_jmap.async_client.async_fetch_session", mock_fetch)
+        assert await client.get_account_id() == _USERNAME
+        mock_fetch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_account_id_fetches_session_on_first_call(self, monkeypatch):
+        client = AsyncJMAPClient(url=_JMAP_URL, username=_USERNAME, password=_PASSWORD)
+        fetched = Session(api_url=_API_URL, account_id="fetched-account", state="s")
+        mock_fetch = AsyncMock(return_value=fetched)
+        monkeypatch.setattr("calendaring_jmap.async_client.async_fetch_session", mock_fetch)
+        assert await client.get_account_id() == "fetched-account"
+        mock_fetch.assert_awaited_once()
+        assert client._session_cache is fetched
 
     @pytest.mark.asyncio
     async def test_get_object_by_uid_found(self, monkeypatch):

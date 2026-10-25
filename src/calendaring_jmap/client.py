@@ -1308,6 +1308,22 @@ class JMAPClient(_JMAPClientBase):
 
         return method_responses
 
+    def get_account_id(self) -> str:
+        """Return the session's default account id.
+
+        Fetches the session on first call if it isn't already cached, the
+        same as any other method here; raises the same errors a session
+        fetch can (for example a refused login). See
+        :attr:`~calendaring_jmap.session.Session.account_id` for how the
+        server chooses this account.
+
+        Every ``account_id`` parameter on this client already falls back
+        to this same value when left ``None``; call this directly only
+        when you need the id itself, such as to pass it on to another
+        component.
+        """
+        return self._get_session().account_id
+
     def get_calendars(self, account_id: str | None = None) -> list[JMAPCalendar[Literal[False]]]:
         """Fetch all calendars for an account.
 
