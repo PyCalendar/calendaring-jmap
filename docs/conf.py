@@ -24,7 +24,9 @@ extensions = [
     "sphinxext.opengraph",
 ]
 
-html_baseurl = "https://calendaring-jmap.readthedocs.io/"
+html_baseurl = os.environ.get(
+    "READTHEDOCS_CANONICAL_URL", "https://calendaring-jmap.readthedocs.io/en/stable/"
+)
 
 ogp_site_url = html_baseurl
 ogp_site_name = "calendaring-jmap"
