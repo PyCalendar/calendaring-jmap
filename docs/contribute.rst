@@ -72,7 +72,7 @@ calendaring-jmap follows the Python Calendaring Ecosystem's `AI policy <https://
 Commits and pull requests
 =========================
 
-Commit messages follow Conventional Commits: ``type: subject``, lowercase type, imperative mood, no period, for example ``fix: reject negative event duration``. Common types in this repo: ``feat``, ``fix``, ``test``, ``docs``, ``chore``, ``refactor``. A scope in parens is fine when it adds real information (``fix(convert): ...``), skip it otherwise. One line is enough; this project doesn't use commit bodies or trailers.
+Commit messages follow Conventional Commits: ``type: subject``, lowercase type, imperative mood, no period, for example ``fix: reject negative event duration``. Common types in this repo: ``feat``, ``fix``, ``test``, ``docs``, ``chore``, ``refactor``. A scope in parentheses is fine when it adds real information (``fix(convert): ...``), skip it otherwise. One line is enough; this project doesn't use commit bodies or trailers.
 
 Keep each commit to one concern. A PR that both fixes a bug and refactors an unrelated helper should be two commits, not one with an unrelated diff mixed in; split it into two PRs instead if the two concerns don't obviously belong together (a broad cleanup PR touching many small, related things is fine as one PR with several commits inside it).
 
@@ -93,7 +93,7 @@ If your PR changes behavior, add a news fragment. CI-only and internal-refactor 
 
 Where ``<type>`` is one of: ``breaking``, ``removal``, ``feature``, ``bugfix``, ``documentation``, ``deps``, ``internal``, ``chore``, ``security``.
 
-Write a short, user-facing description of the change inside the file: state what changed and, if it's a fix, what happened before. The issue link is generated automatically from the filename's number, so don't add one yourself. If your PR isn't tied to an issue, prefix the filename with ``+`` instead of a number (for example ``+conversion-validation.bugfix.rst``); towncrier accepts orphan fragments this way and just omits the issue link. Fragments are collected into ``docs/changelog.rst`` at release time. Don't edit that file directly. See :doc:`release` for the maintainer-only steps that actually cut a release.
+Write a short, user-facing description of the change inside the file: state what changed and, if it's a fix, what happened before. The issue link is generated automatically from the file name's number, so don't add one yourself. If your PR isn't tied to an issue, prefix the filename with ``+`` instead of a number (for example ``+conversion-validation.bugfix.rst``); towncrier accepts orphan fragments this way and just omits the issue link. Fragments are collected into ``docs/changelog.rst`` at release time. Don't edit that file directly. See :doc:`release` for the maintainer-only steps that actually cut a release.
 
 Keep each fragment to one or two sentences. State the change; don't explain how it works internally, why it was needed, or how it was found, that belongs in the PR description, not the changelog. If your PR touches more than one distinct behavior (two separate bugs, or a feature plus an unrelated parameter addition), write one fragment per behavior (``11.feature.1.rst``, ``11.feature.2.rst``, and further numbered fragments as needed) instead of one fragment covering all of them. See any ``bugfix`` fragment in ``news/`` for the length and tone to aim for.
 
@@ -147,7 +147,7 @@ Writing documentation
 
 This section covers ``docs/*.rst`` page prose: how-to guides, tutorials, reference pages, and explanation pages. For docstring and comment conventions, see :ref:`code-style` above; this section cross-references those rules rather than restating them.
 
-Choosing a Diataxis category
+Choosing a Diátaxis category
     calendaring-jmap's docs are organized into four categories: tutorials, how-to guides, reference, and explanation. This split comes from the `Diátaxis framework <https://diataxis.fr/>`_. Django's docs use the same four-way split, under different section names; pytest's docs use nearly these same names. Each category answers a different question, so pick the one matching what the reader actually needs:
 
     - **Tutorial** (``tutorials/``): a single guided path a newcomer follows start to finish, learning by doing. See :doc:`tutorials/quickstart` for the shape this takes. New content almost never belongs here: a tutorial teaches someone who knows nothing yet, which is a narrow, rarely-needed case, and most new content is really a how-to.
@@ -159,7 +159,7 @@ Write about JMAP, not about other protocols
     A reader of these docs is here to learn JMAP, not CalDAV, WebDAV, or anything else. Don't explain a JMAP behavior by contrasting it against how another protocol or library does the same thing, even as a single clarifying aside: state the JMAP fact on its own terms. This applies to docstrings too, not just ``.rst`` pages, since they render into the published reference.
 
 Prose style for pages
-    Page prose follows the `Microsoft Writing Style Guide <https://learn.microsoft.com/style-guide/welcome/>`_: plain language, active voice, second person ("you," not "the user"), sentence-case headings, no exclamation points. Contractions are fine. Avoid Latin abbreviations in prose ("for example," not "e.g."; "that is," not "i.e."). This is a different, more conversational register than :ref:`prose-docstrings-comments`'s rule, which governs terse, factual docstring/comment text; that rule's bans apply here too, unchanged.
+    Page prose follows the `Microsoft Writing Style Guide <https://learn.microsoft.com/en-us/style-guide/welcome/>`_: plain language, active voice, second person ("you," not "the user"), sentence-case headings, no exclamation points. Contractions are fine. Avoid Latin abbreviations in prose ("for example," not "e.g."; "that is," not "i.e."). This is a different, more conversational register than :ref:`prose-docstrings-comments`'s rule, which governs terse, factual docstring/comment text; that rule's bans apply here too, unchanged.
 
     Write each paragraph as one line, not hard-wrapped at a fixed column width. RST collapses whitespace, so wrapping serves no rendering purpose; every existing page in this repo is written this way.
 
@@ -167,7 +167,7 @@ Prose style for pages
 
     Spell these terms consistently: GitHub, add-on (not addon), plug-in (not plugin), reST or reStructuredText (not RST, except as the file extension or in a code span like ``.rst``).
 
-    :ref:`vale-check` runs the Microsoft Vale style package plus `signs-of-ai-writing <https://github.com/ammil-industries/vale-signs-of-ai-writing>`_ (patterns from Wikipedia's `Signs of AI writing <https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing>`_ essay) in CI, catching a real subset of these rules mechanically: contractions, passive voice, dash spacing, sentence-case headings, hedging clusters, chatbot phrases, and the AI-typical vocabulary and symbolic-language patterns the essay documents. It doesn't catch everything: the Diataxis category choice and whether a how-to page pushed "why" content where it belongs still need a reviewer's judgment.
+    :ref:`vale-check` runs the Microsoft Vale style package plus `signs-of-ai-writing <https://github.com/ammil-industries/vale-signs-of-ai-writing>`_ (patterns from Wikipedia's `Signs of AI writing <https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing>`_ essay) in CI, catching a real subset of these rules mechanically: contractions, passive voice, dash spacing, sentence-case headings, hedging clusters, chatbot phrases, and the AI-typical vocabulary and symbolic-language patterns the essay documents. It doesn't catch everything: the Diátaxis category choice and whether a how-to page pushed "why" content where it belongs still need a reviewer's judgment.
 
 Cross-referencing and code examples
     Link between pages with ``:doc:`` and an explicit relative path (``:doc:`../explanation/design```). Reference a class or method with ``:class:``/``:meth:`` and a leading ``~`` for a short display name (``:class:`~calendaring_jmap.objects.calendar.JMAPCalendar```). Cite an RFC the same way :ref:`code-style`'s "RFC citations" rule describes for docstrings, merging the section into the role.

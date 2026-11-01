@@ -30,7 +30,7 @@ Catch specific error types
     except JMAPError as e:
         print(f"Protocol error: {e}")
 
-See :doc:`../reference/errors` for what each error class means and the full list of JMAP method error types.
+See :mod:`~calendaring_jmap.error` for what each error class means and the full list of JMAP method error types.
 
 Malformed iCalendar input
 =========================

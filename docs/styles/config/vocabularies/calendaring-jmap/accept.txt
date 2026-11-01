@@ -1,0 +1,43 @@
+# AGPL
+# ASCII
+# async
+autodoc
+calendaring[_-]jmap
+# config
+# coroutines?
+# CRUD
+# Diataxis
+dicts?
+# docstrings?
+draft-ietf-calext-jscalendar-icalendar
+# else's
+# filename
+# hardcoding
+i[Cc]alendar
+# IETF
+# inlined
+JMAP
+JSCalendar
+niquests
+NLnet
+# NNNN
+# parens
+POSTs?
+# pytest
+# repo
+RFC's
+# RST
+# snake_case
+# subclassing
+subcomponent
+Subpackages
+# substrings?
+# TLS
+towncrier
+# UID
+unobfuscated
+# [Uu]ntrusted
+# URN
+# VCALENDAR
+# VCONFERENCE
+VEVENTs

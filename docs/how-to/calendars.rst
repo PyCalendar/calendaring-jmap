@@ -14,7 +14,7 @@ List calendars
     for cal in calendars:
         print(cal.id, cal.name, cal.color)
 
-Each item is a :class:`~calendaring_jmap.objects.calendar.JMAPCalendar`; see :doc:`../reference/objects` for its fields.
+Each item is a :class:`~calendaring_jmap.objects.calendar.JMAPCalendar`; see :mod:`calendaring_jmap.objects.calendar_objects` for its fields.
 
 Pass ``account_id`` to list calendars on another account that's been shared with you:
 
@@ -38,7 +38,7 @@ Update a calendar
 
     client.update_calendar(calendar_id, name="Team events (archived)")
 
-Only the arguments you pass change; the rest are left alone. ``name``, ``color``, and ``timeZone`` are per-user: updating them as the calendar's owner changes what every sharee sees, until a sharee sets their own override on top.
+Only the arguments you pass change; the rest are left alone. ``name``, ``color``, and ``timeZone`` are per-user: updating them as the calendar's owner changes what every person with whom the calendar is shared sees, until a that person sets their own override on top.
 
 Delete a calendar
 =================
