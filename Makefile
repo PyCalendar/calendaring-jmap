@@ -7,6 +7,7 @@ SHELL           = bash
 SPHINXOPTS      ?=
 PAPER           ?=
 VERSION			?=
+TOWNCRIEROPTS   ?=
 
 # Internal variables.
 RUFFPATH        = "$(realpath .venv/bin/ruff)"
@@ -203,7 +204,7 @@ rtd-pr-preview: rtd-prepare .venv apidoc ## Build pull request preview on Read t
 #
 .PHONY: changes-check
 changes-check: dev
-	$(TOWNCRIERPATH) check
+	$(TOWNCRIERPATH) check $(TOWNCRIEROPTS)
 
 #.PHONY: changes-draft
 #changes-draft: dev
