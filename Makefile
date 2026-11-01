@@ -201,10 +201,10 @@ rtd-pr-preview: rtd-prepare .venv apidoc ## Build pull request preview on Read t
 #	@uv run scripts/generate_windows_to_olson_mapping.py
 #	$(RUFFPATH) format
 #
-#.PHONY: changes-check
-#changes-check: dev
-#	$(TOWNCRIERPATH) check
-#
+.PHONY: changes-check
+changes-check: dev
+	$(TOWNCRIERPATH) check
+
 #.PHONY: changes-draft
 #changes-draft: dev
 #	@test -n "$(VERSION)" || (echo "VERSION is not set. Run 'export VERSION=x.y.z' first." && exit 1)
