@@ -44,9 +44,6 @@ dev = [
   "towncrier==26.9.0",
 ]
 
-# Duplicated in test, not sure why it's here.
-#requests = ["requests>=2.34.2"]
-
 test = [
   "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
@@ -133,6 +130,8 @@ filename = "docs/changelog.rst"
 issue_format = "`#{issue} <https://github.com/pycalendar/calendaring-jmap/issues/{issue}>`_"
 start_string = ".. towncrier release notes start\n"
 title_format = "{version} ({project_date})"
+# First underline is used for version/date header.
+# Second underline is used for the type names (like 'Bug fixes:').
 underlines = ["-", "~", "`"]
 
 [[tool.towncrier.type]]
@@ -179,3 +178,14 @@ showcontent = true
 directory = "security"
 name = "Security fixes"
 showcontent = true
+
+[tool.uv]
+python-preference = "managed"
+
+[tool.uv.sources]
+calendaring-jmap = { workspace = true, editable = true }
+
+[tool.uv.workspace]
+members = [
+    ".",
+]
