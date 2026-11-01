@@ -62,5 +62,8 @@ src/calendaring_jmap/_version.py
 # uv lock file
 uv.lock
 
+# Docs build
+_build/
+
 # Vale-synced third-party style packages (fetched by `vale sync`)
 /docs/styles/Microsoft/
