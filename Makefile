@@ -168,6 +168,10 @@ docs-all: .venv apidoc clean vale doctest docstring html linkcheckbroken  ## Cle
 #test: .venv  ## Run code tests and coverage
 #	@uv run tox
 #
+.PHONY: type-check
+type-check: .venv  ## Run type checking
+	@uv run mypy src/calendaring_jmap --ignore-missing-imports
+
 #.PHONY: test-dist
 #test-dist:  ## Build and test the distribution files
 #	@src/calendaring_jmap/tests/test_create_release.sh

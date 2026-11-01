@@ -73,17 +73,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@4c58170a945e4e68ce3fc5b7af3d341d9b8c64ef # v10.3.3
         with:
-          python-version: "3.13"
-          pip-version: "26.2.2"
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+          # UV_VERSION can be set in the repository settings:
+          # Settings -> Secrets and variables -> Actions or click here:
+          # https://github.com/Pycalendar/calendaring-jmap/settings/variables/actions
+          # -> Variables -> UV_VERSION
+          version: "${{ vars.UV_VERSION }}"
 
       - name: Type check
-        run: python -m mypy src/calendaring_jmap --ignore-missing-imports
+        run: make type-check
 
   test:
     name: Test on Python ${{ matrix.python-version }}
