@@ -164,10 +164,16 @@ vale: .venv apidoc  ## Run Vale style, grammar, and spell checks
 .PHONY: docs-all
 docs-all: .venv apidoc clean vale doctest docstring html linkcheckbroken  ## Clean docs build, then run vale, doctest, html, and linkcheckbroken
 
-#.PHONY: test
-#test: .venv  ## Run code tests and coverage
-#	@uv run tox
-#
+.PHONY: test
+test: .venv  ## Run code tests
+	@uv run pytest
+
+.PHONY: test-coverage
+test-coverage: .venv  ## Run code tests and coverage
+	@uv run pytest --cov --cov-branch --cov-report=xml \
+            --junitxml=junit.xml -o junit_family=legacy \
+            src/calendaring_jmap/tests/test_jmap_unit.py
+
 .PHONY: type-check
 type-check: .venv  ## Run type checking
 	@uv run mypy src/calendaring_jmap --ignore-missing-imports
