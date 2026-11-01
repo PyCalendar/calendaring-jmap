@@ -40,7 +40,7 @@ jobs:
         with:
           # UV_VERSION can be set in the repository settings:
           # Settings -> Secrets and variables -> Actions or click here:
-          # https://github.com/Pycalendar/calendar/settings/variables/actions
+          # https://github.com/Pycalendar/calendaring-jmap/settings/variables/actions
           # -> Variables -> UV_VERSION
           version: "${{ vars.UV_VERSION }}"
 
