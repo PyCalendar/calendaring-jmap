@@ -1,0 +1,56 @@
+name: Check news fragments filenames, build documentation, check links, spelling, grammar, and style
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+  # Build pull requests
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'Makefile'
+      - 'src/calendaring_jmap/*.py'
+      - 'src/calendaring_jmap/convert/*.py'
+      - 'src/calendaring_jmap/objects/*.py'
+      - '.github/workflows/documentation.yml'
+      - '.readthedocs.yaml'
+      - '.vale.ini'
+      - 'news/*.*'
+
+jobs:
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@4c58170a945e4e68ce3fc5b7af3d341d9b8c64ef # v10.3.3
+        with:
+          # UV_VERSION can be set in the repository settings:
+          # Settings -> Secrets and variables -> Actions or click here:
+          # https://github.com/Pycalendar/calendar/settings/variables/actions
+          # -> Variables -> UV_VERSION
+          version: "${{ vars.UV_VERSION }}"
+
+      - name: Create Python virtual environment, install requirements
+        run: make .venv PYTHONVERSION=${{ matrix.python-version }}
+
+      - name: Check news fragments filenames
+        run: make changes-check PYTHONVERSION=${{ matrix.python-version }}
+
+      - name: Build HTML documentation
+        run: make html PYTHONVERSION=${{ matrix.python-version }}
+
+      - name: Run vale
+        run: make vale VALEOPTS="--minAlertLevel='warning'" PYTHONVERSION=${{ matrix.python-version }}
+
+      - name: Check for broken links
+        run: make linkcheckbroken PYTHONVERSION=${{ matrix.python-version }}

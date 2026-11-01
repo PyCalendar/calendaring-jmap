@@ -16,13 +16,13 @@ build:
     # This is a special exit code on Read the Docs that will cancel the build immediately.
     - |
       if [ "$READTHEDOCS_VERSION_TYPE" = "external" ] && git diff --quiet origin/main -- . docs/ \
-        src/calendaring-jmap/**/*.py \
-        .github/workflows/tests.yml \
+        src/calendaring_jmap/**/*.py \
+        .github/workflows/documentation.yml \
         .readthedocs.yml \
         .vale.ini \
         Makefile \
         pyproject.toml \
-        ':!src/calendaring-jmap/tests';
+        ':!src/calendaring_jmap/tests';
       then
         exit 183;
       fi
