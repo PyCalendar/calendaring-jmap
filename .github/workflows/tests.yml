@@ -41,7 +41,7 @@ jobs:
           version: "${{ vars.UV_VERSION }}"
 
       - name: Check for a news fragment
-        run: make changes-check TOWNCRIEROPTS=--compare-with origin/${GITHUB_BASE_REF}
+        run: make changes-check TOWNCRIEROPTS="--compare-with origin/${GITHUB_BASE_REF}"
 
   lint:
     name: Lint with Ruff
