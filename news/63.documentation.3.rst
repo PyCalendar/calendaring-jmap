@@ -1,1 +1,1 @@
-Fixed broken links found by Vale's link checker, and removed unused theme files.
+Fixed broken links found by ``make linkcheckbroken``, and removed unused theme files.
