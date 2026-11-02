@@ -4,6 +4,11 @@
 calendaring\_jmap.objects package
 =================================
 
+.. automodule:: calendaring_jmap.objects
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 Submodules
 ----------
 
@@ -16,11 +21,3 @@ Submodules
    calendaring_jmap.objects.calendar_object
    calendaring_jmap.objects.contact
    calendaring_jmap.objects.event_search_result
-
-Module contents
----------------
-
-.. automodule:: calendaring_jmap.objects
-   :members:
-   :show-inheritance:
-   :undoc-members:

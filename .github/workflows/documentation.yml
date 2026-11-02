@@ -38,11 +38,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@4c58170a945e4e68ce3fc5b7af3d341d9b8c64ef # v10.3.3
         with:
-          # UV_VERSION can be set in the repository settings:
-          # Settings -> Secrets and variables -> Actions or click here:
-          # https://github.com/Pycalendar/calendaring-jmap/settings/variables/actions
-          # -> Variables -> UV_VERSION
-          version: "${{ vars.UV_VERSION }}"
+          version: "0.13.6"
 
       - name: Create Python virtual environment, install requirements
         run: make .venv PYTHONVERSION=${{ matrix.python-version }}

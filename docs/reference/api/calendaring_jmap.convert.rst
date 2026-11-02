@@ -4,6 +4,11 @@
 calendaring\_jmap.convert package
 =================================
 
+.. automodule:: calendaring_jmap.convert
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 Submodules
 ----------
 
@@ -12,11 +17,3 @@ Submodules
 
    calendaring_jmap.convert.ical_to_jscal
    calendaring_jmap.convert.jscal_to_ical
-
-Module contents
----------------
-
-.. automodule:: calendaring_jmap.convert
-   :members:
-   :show-inheritance:
-   :undoc-members:

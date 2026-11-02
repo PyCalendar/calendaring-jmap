@@ -331,7 +331,7 @@ Prose style for pages
 
     .. vale Vale.Spelling = NO
 
-    Spell these terms consistently: GitHub, add-on (not addon), plug-in (not plugin), reST or reStructuredText (not RST, except as the file extension or in a code span like ``.rst``).
+    Spell these terms consistently: GitHub, add-on (not addon), plug-in (not plugin), reStructuredText (never reST, which gets confused with REST, and not RST, except as the file extension or in a code span like ``.rst``).
 
     .. vale Vale.Spelling = YES
 

@@ -4,6 +4,11 @@
 calendaring\_jmap package
 =========================
 
+.. automodule:: calendaring_jmap
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 Subpackages
 -----------
 
@@ -24,11 +29,3 @@ Submodules
    calendaring_jmap.constants
    calendaring_jmap.error
    calendaring_jmap.session
-
-Module contents
----------------
-
-.. automodule:: calendaring_jmap
-   :members:
-   :show-inheritance:
-   :undoc-members:

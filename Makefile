@@ -23,7 +23,7 @@ SOURCE          = ../src/calendaring_jmap/
 APIBUILDDIR     = $(DOCS_DIR)reference/api
 PAPEROPT_a4     = -D latex_paper_size=a4
 PAPEROPT_letter = -D latex_paper_size=letter
-ALLSPHINXOPTS   = -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
+ALLSPHINXOPTS   = -W -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
 VALEFILES       := $(shell find $(DOCS_DIR) -type f -name "*.rst" -print)  # Also add `src` for docstrings.
 VALEOPTS        ?=
 ZIZMOROPTS      ?=
@@ -74,6 +74,7 @@ apidoc: .venv  ## Build .rst stub file pages for API reference documentation
 	--force \
 	--remove-old \
 	--separate \
+	--module-first \
 	-o reference/api \
 	$(SOURCE) \
 	$(SOURCE)/tests*

@@ -6,6 +6,7 @@
 import datetime
 import importlib.metadata
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -48,6 +49,12 @@ master_doc = "index"
 exclude_patterns = [
     "reference/api/modules.rst",
 ]
+
+# niquests' own AsyncSession type hints reference AsyncLifeCycleHook in a way
+# sphinx-autodoc-typehints can't resolve from here; nothing in this project's
+# own code can fix a third-party library's annotation. Scoped to this one
+# warning category so -W still catches anything else.
+suppress_warnings = ["sphinx_autodoc_typehints.forward_reference"]
 
 # -- Options for HTML output -------------------------------------------------
 
@@ -165,6 +172,27 @@ autodoc_default_options = {
     "show-inheritance": True,
     "undoc-members": True,
 }
+
+
+_PRIVATE_BASE_RE = re.compile(r":py:class:`~?[\w.]*\.?(_\w+)`")
+
+
+def _drop_private_bases(app, name, obj, options, bases):
+    """Keep a private base (e.g. ``_JMAPClientBase``) off the rendered
+    "Bases:" line; ``show-inheritance`` otherwise renders it as-is.
+
+    By the time this event fires, each entry in ``bases`` is already a
+    rendered ``:py:class:`...``` role string, not a class object, so the
+    check matches the role's own target name rather than ``__name__``.
+    Falls back to ``object`` if every base was private, so the "Bases:"
+    line never renders empty.
+    """
+    kept = [base for base in bases if not _PRIVATE_BASE_RE.fullmatch(base)]
+    bases[:] = kept or [":py:class:`object`"]
+
+
+def setup(app):
+    app.connect("autodoc-process-bases", _drop_private_bases)
 
 
 # -- sphinx.ext.intersphinx configuration ------------------------------------------------
