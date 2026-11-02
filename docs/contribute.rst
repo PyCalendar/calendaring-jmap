@@ -329,7 +329,11 @@ Prose style for pages
 
     Avoid "simple," "just," "very," and "easy": a reader who can't complete the task as described finds these words condescending rather than reassuring. Prefer "such as" over "like" when introducing an example, "select" over "check"/"tick" for a UI action, and "verify" over "be sure" when asking the reader to confirm something.
 
+    .. vale Vale.Spelling = NO
+
     Spell these terms consistently: GitHub, add-on (not addon), plug-in (not plugin), reST or reStructuredText (not RST, except as the file extension or in a code span like ``.rst``).
+
+    .. vale Vale.Spelling = YES
 
     :ref:`vale-check` runs the Microsoft Vale style package plus `signs-of-ai-writing <https://github.com/ammil-industries/vale-signs-of-ai-writing>`_ (patterns from Wikipedia's `Signs of AI writing <https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing>`_ essay) in CI, catching a real subset of these rules mechanically: contractions, passive voice, dash spacing, sentence-case headings, hedging clusters, chatbot phrases, and the AI-typical vocabulary and symbolic-language patterns the essay documents. It doesn't catch everything: the Diátaxis category choice and whether a how-to page pushed "why" content where it belongs still need a reviewer's judgment.
 
