@@ -1,0 +1,1 @@
+Switched the project to uv for Python and dependency management, and to a :file:`Makefile` for the common development commands (tests, linting, docs builds). @stevepiercy

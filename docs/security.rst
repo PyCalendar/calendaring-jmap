@@ -37,7 +37,7 @@ Push subscription callback URL
 Untrusted calendar data
 -----------------------
 
-Servers can return iCalendar data that isn't fully spec-compliant. calendaring-jmap's fixup step (``convert/_fixup.py``) corrects a small, fixed set of known issues (missing ``DTSTAMP``, out-of-range dates, duplicate lines) using linear-time regular expressions with no nested quantifiers, so it isn't vulnerable to catastrophic backtracking on adversarial input.
+Servers can return iCalendar data that isn't fully spec-compliant. calendaring-jmap's fix up step (``convert/_fixup.py``) corrects a small, fixed set of known issues (missing ``DTSTAMP``, out-of-range dates, duplicate lines) using linear-time regular expressions with no nested quantifiers, so it isn't vulnerable to catastrophic backtracking on adversarial input.
 
 JMAP servers, not this client, expand recurring events server-side. calendaring-jmap doesn't do client-side recurrence expansion, and doesn't read a search's time range or result count before sending it to the server.
 

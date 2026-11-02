@@ -10,6 +10,14 @@ precedence = "override"
 SPDX-FileCopyrightText = "2026 calendaring-jmap contributors"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
 
+# Auto-generated lockfile, rewritten by uv on every lock/sync, a header
+# would just get stripped.
+[[annotations]]
+path = "uv.lock"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 calendaring-jmap contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
 # Bare version string, no comment syntax available
 [[annotations]]
 path = ".python-version"

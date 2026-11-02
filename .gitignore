@@ -41,10 +41,7 @@ htmlcov/
 .mypy_cache/
 
 # Virtual environments
-.venv
-venv/
-ENV/
-env/
+/.venv/
 
 # Environment variables
 .env
@@ -62,12 +59,8 @@ env/
 # Generated version file
 src/calendaring_jmap/_version.py
 
-# uv lock file
-uv.lock
-
-# Docs build (including comparison builds under other names, e.g. docs/_build2)
-docs/_build*/
+# Docs build
+_build/
 
 # Vale-synced third-party style packages (fetched by `vale sync`)
-docs/.vale/styles/Microsoft/
-docs/.vale/styles/signs-of-ai-writing/
+/docs/styles/Microsoft/

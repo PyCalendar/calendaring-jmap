@@ -19,8 +19,8 @@ Why there's a sync and an async client
 
 :class:`~calendaring_jmap.objects.calendar.JMAPCalendar` and :class:`~calendaring_jmap.objects.calendar_object.JMAPCalendarObject` need to support both: the same calendar object type is returned whether it came from the sync or the async client, and its methods (``search``, ``add_event``, and similar) need to return a plain value in the sync case and a coroutine in the async case. Python's type system can't narrow a return type based on a runtime flag, so calendaring-jmap uses a generic type parameter on :class:`~calendaring_jmap.objects.calendar.JMAPCalendar` purely for static typing: it lets type checkers give a correctly-typed result depending on whether the calendar came from :meth:`~calendaring_jmap.client.JMAPClient.get_calendars` or :meth:`~calendaring_jmap.async_client.AsyncJMAPClient.get_calendars`, without changing anything at runtime.
 
-Why there's a fixup step
-========================
+Why there's a fix up step
+=========================
 
 Servers can return iCalendar data that doesn't fully comply with :rfc:`5545`: a missing ``DTSTAMP``, a duplicated line, a date field out of the valid range. calendaring-jmap corrects a small, fixed set of known issues before handing iCalendar strings back to callers, rather than surfacing a parse error for data a real server actually sent. See :doc:`../security` for why these corrections are implemented as simple, non-backtracking regular expressions.
 
@@ -36,8 +36,8 @@ Why recurrence override patches compare by value, not by key
 
 A recurrence override patch only needs to carry what actually changed on that one occurrence, not the whole event again. For most properties this is a direct comparison: a changed ``title`` string either matches the master's or it doesn't. The map-shaped properties (``participants``, ``locations``, ``alerts``, ``virtualLocations``) don't work that way, since each entry gets a fresh, randomly generated key every time the conversion layer builds one, so the same unchanged location on the master and an override child never share a key even when nothing about it actually changed. Comparing these maps by their sorted canonical content instead of by key-for-key equality is what makes the override diff correct: a location that's genuinely identical on both sides is correctly left out of the patch, and a location that's genuinely different is correctly included.
 
-Why participants carry calendarAddress, not sendTo
-==================================================
+Why participants carry ``calendarAddress``, not ``sendTo``
+==========================================================
 
 An ``ORGANIZER``/``ATTENDEE`` value is a URI (:rfc:`5545#section-3.3.3`). It doesn't have to use the ``mailto:`` scheme; ``sip:alice@example.com`` is valid too. JSCalendar's Participant ``email`` property is narrower: :rfc:`8984#section-4.4.6` defines it as an :rfc:`5322#section-3.4.1` addr-spec, not an arbitrary URI. So a non-mailto address converts to ``calendarAddress`` as-is, and ``email`` is left unset rather than filled with a value that isn't actually an email address.
 
@@ -51,7 +51,7 @@ A JSCalendar Alert's ``trigger`` is an OffsetTrigger or AbsoluteTrigger object (
 Why Link conversion is narrower than the draft's full mapping
 =============================================================
 
-draft-ietf-calext-jscalendar-icalendar section 3.4 defines a full Link/ATTACH/IMAGE/LINK mapping. calendaring-jmap implements only the attachment case its own :meth:`~calendaring_jmap.client.JMAPClient.attach_to_event`/:meth:`~calendaring_jmap.client.JMAPClient.get_event_attachments` need. A URI-form ``ATTACH`` converts to ``href`` as-is. A binary-form ``ATTACH`` (:rfc:`5545#section-3.8.1.1`'s inline ``ENCODING=BASE64;VALUE=BINARY`` form) converts to a ``data:`` URL (:rfc:`2397`) instead, with ``FMTTYPE`` becoming both the data URL's media type and ``contentType``. ``rel`` is always ``"enclosure"``, since an iCalendar ``ATTACH``, unlike JSCalendar's general Link object, has no notion of a link that isn't an attachment; every ``ATTACH`` converts as one, and the reverse only happens for a Link whose ``rel`` is ``"enclosure"``.
+`draft-ietf-calext-jscalendar-icalendar section 3.4 <https://datatracker.ietf.org/doc/html/draft-ietf-calext-jscalendar-icalendar-28#name-link-2>`_ defines a full Link/ATTACH/IMAGE/LINK mapping. calendaring-jmap implements only the attachment case its own :meth:`~calendaring_jmap.client.JMAPClient.attach_to_event`/:meth:`~calendaring_jmap.client.JMAPClient.get_event_attachments` need. A URI-form ``ATTACH`` converts to ``href`` as-is. A binary-form ``ATTACH`` (:rfc:`5545#section-3.8.1.1`'s inline ``ENCODING=BASE64;VALUE=BINARY`` form) converts to a ``data:`` URL (:rfc:`2397`) instead, with ``FMTTYPE`` becoming both the data URL's media type and ``contentType``. ``rel`` is always ``"enclosure"``, since an iCalendar ``ATTACH``, unlike JSCalendar's general Link object, has no notion of a link that isn't an attachment; every ``ATTACH`` converts as one, and the reverse only happens for a Link whose ``rel`` is ``"enclosure"``.
 
 A plain ``URL`` property has no defined relationship to the links JSCalendar names (:rfc:`5545#section-3.8.4.6` versus :rfc:`8984#section-4.2.7`'s enclosure/describedby/icon). It converts to a Link with no ``rel`` set, matching the Link object's own optional ``rel`` (:rfc:`8984#section-1.4.11`), and only a Link with no ``rel`` at all converts back to ``URL``.
 

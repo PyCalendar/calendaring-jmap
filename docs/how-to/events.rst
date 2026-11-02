@@ -74,7 +74,7 @@ Delete an event
 
     old_state, new_state = client.delete_event(event_id)
 
-``old_state`` and ``new_state`` are the account's state immediately before and after the delete; pass ``new_state`` as a later write's ``if_in_state`` to chain writes without a separate read in between.
+``old_state`` and ``new_state`` are the account's state immediately before and after the delete. Pass ``new_state`` as a later call's ``if_in_state`` to require that no other write has landed since, without reading the state back first.
 
 Search events
 =============

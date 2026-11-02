@@ -1,0 +1,1 @@
+Fixed broken links found by ``make linkcheckbroken``, and removed unused theme files.

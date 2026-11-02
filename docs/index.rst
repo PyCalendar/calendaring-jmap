@@ -54,7 +54,7 @@ A Python client library for calendar operations over JMAP (:rfc:`8620`, JMAP cor
 
    tutorials/quickstart
    how-to/index
-   Reference <reference/index>
+   reference/index
    explanation/index
    contribute
    security

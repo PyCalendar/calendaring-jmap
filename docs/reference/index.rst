@@ -1,31 +1,36 @@
 .. SPDX-FileCopyrightText: 2026 calendaring-jmap contributors
 .. SPDX-License-Identifier: AGPL-3.0-or-later
 
-:mod:`calendaring_jmap`: Package entry points
-=============================================
+Reference
+=========
 
 .. meta::
-   :description: get_jmap_client, get_async_jmap_client, and get_connection_params, the top-level functions that read configuration and return a connected client.
+   :description: This section contains reference material for the calendaring_jmap API, including get_jmap_client, get_async_jmap_client, and get_connection_params as the top-level functions that read configuration and return a connected client.
 
-``get_jmap_client``, ``get_async_jmap_client``, and ``get_connection_params`` are the functions most code imports directly from ``calendaring_jmap``.
+This section contains reference material for the ``calendaring_jmap`` API, including :func:`~calendaring_jmap.get_jmap_client`, :func:`~calendaring_jmap.get_async_jmap_client`, and :func:`~calendaring_jmap.get_connection_params` as the top-level functions that read configuration and return a connected client.
 
-.. autofunction:: calendaring_jmap.get_jmap_client
+API reference
+-------------
 
-.. autofunction:: calendaring_jmap.get_async_jmap_client
+.. toctree::
+    :maxdepth: 3
 
-.. autofunction:: calendaring_jmap.get_connection_params
+    api/calendaring_jmap
 
-Everything else exported from ``calendaring_jmap`` (:class:`~calendaring_jmap.client.JMAPClient`, :class:`~calendaring_jmap.async_client.AsyncJMAPClient`, the calendar objects, and the error hierarchy) has its own page, listed below.
+
+Compatibility
+-------------
 
 .. toctree::
    :maxdepth: 1
 
-   client
-   async_client
-   objects
-   convert
-   session
-   constants
-   errors
    server-compatibility
+
+
+Change log
+----------
+
+.. toctree::
+   :maxdepth: 1
+
    ../changelog

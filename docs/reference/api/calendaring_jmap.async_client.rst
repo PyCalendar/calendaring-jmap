@@ -1,0 +1,10 @@
+.. SPDX-FileCopyrightText: 2026 calendaring-jmap contributors
+.. SPDX-License-Identifier: AGPL-3.0-or-later
+
+calendaring\_jmap.async\_client module
+======================================
+
+.. automodule:: calendaring_jmap.async_client
+   :members:
+   :show-inheritance:
+   :undoc-members:
