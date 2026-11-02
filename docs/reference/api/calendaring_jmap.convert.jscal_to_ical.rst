@@ -5,6 +5,7 @@ calendaring\_jmap.convert.jscal\_to\_ical module
 ================================================
 
 .. automodule:: calendaring_jmap.convert.jscal_to_ical
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

@@ -5,6 +5,7 @@ calendaring\_jmap.objects.busy\_interval module
 ===============================================
 
 .. automodule:: calendaring_jmap.objects.busy_interval
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

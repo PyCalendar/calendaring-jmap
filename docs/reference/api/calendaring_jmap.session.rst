@@ -5,6 +5,7 @@ calendaring\_jmap.session module
 ================================
 
 .. automodule:: calendaring_jmap.session
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

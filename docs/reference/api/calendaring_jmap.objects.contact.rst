@@ -5,6 +5,7 @@ calendaring\_jmap.objects.contact module
 ========================================
 
 .. automodule:: calendaring_jmap.objects.contact
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

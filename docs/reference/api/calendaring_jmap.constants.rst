@@ -5,6 +5,7 @@ calendaring\_jmap.constants module
 ==================================
 
 .. automodule:: calendaring_jmap.constants
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

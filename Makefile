@@ -15,7 +15,9 @@ SPHINXAUTOBUILD = "$(realpath .venv/bin/sphinx-autobuild)"
 SPHINXBUILD     = "$(realpath .venv/bin/sphinx-build)"
 SPHINXAPIDOC    = "$(realpath .venv/bin/sphinx-apidoc)"
 TOWNCRIERPATH   = "$(realpath .venv/bin/towncrier)"
-# TODO: determine why sphinx-apidoc ignores this environment variable
+# sphinx-apidoc's own SPHINX_APIDOC_OPTIONS env var is never set as a real
+# shell variable here, so it's passed explicitly via --automodule-options
+# on the apidoc target below instead.
 SPHINX_APIDOC_OPTIONS = ignore-module-all,members,show-inheritance,undoc-members
 DOCS_DIR        = ./docs/
 BUILDDIR        = ../_build
@@ -27,7 +29,7 @@ ALLSPHINXOPTS   = -W -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) 
 VALEFILES       := $(shell find $(DOCS_DIR) -type f -name "*.rst" -print)  # Also add `src` for docstrings.
 VALEOPTS        ?=
 ZIZMOROPTS      ?=
-PYTHONVERSION   = >=3.10,<3.15
+PYTHONVERSION   = >=3.11,<3.15
 
 # Add the following 'help' target to your Makefile
 # And add help text after each target name starting with '\#\#'
@@ -75,6 +77,7 @@ apidoc: .venv  ## Build .rst stub file pages for API reference documentation
 	--remove-old \
 	--separate \
 	--module-first \
+	--automodule-options=$(SPHINX_APIDOC_OPTIONS) \
 	-o reference/api \
 	$(SOURCE) \
 	$(SOURCE)/tests*

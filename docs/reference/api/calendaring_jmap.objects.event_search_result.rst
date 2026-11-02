@@ -5,6 +5,7 @@ calendaring\_jmap.objects.event\_search\_result module
 ======================================================
 
 .. automodule:: calendaring_jmap.objects.event_search_result
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

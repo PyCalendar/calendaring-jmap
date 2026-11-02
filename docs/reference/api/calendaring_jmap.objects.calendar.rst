@@ -5,6 +5,7 @@ calendaring\_jmap.objects.calendar module
 =========================================
 
 .. automodule:: calendaring_jmap.objects.calendar
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

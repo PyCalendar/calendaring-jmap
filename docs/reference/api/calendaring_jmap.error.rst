@@ -5,6 +5,7 @@ calendaring\_jmap.error module
 ==============================
 
 .. automodule:: calendaring_jmap.error
+   :ignore-module-all:
    :members:
    :show-inheritance:
    :undoc-members:

@@ -1,0 +1,1 @@
+The ``apidoc`` make target now actually passes ``SPHINX_APIDOC_OPTIONS`` to :program:`sphinx-apidoc`, via ``--automodule-options``; the :file:`Makefile` set the variable but never wired it into the command.
