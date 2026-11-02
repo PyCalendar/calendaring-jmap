@@ -1,1 +1,0 @@
-``ical_to_jscal`` no longer emits a ``sendTo`` property on participants, and now emits ``calendarAddress`` instead. Cyrus rejected any event with an ATTENDEE or ORGANIZER without this fix.

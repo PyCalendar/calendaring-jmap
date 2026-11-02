@@ -1,1 +1,0 @@
-Added explanation-page coverage for the conversion layer's own design: why CONFERENCE and VCONFERENCE correlate by URI, and why recurrence override patches compare map-shaped properties by value instead of by key.

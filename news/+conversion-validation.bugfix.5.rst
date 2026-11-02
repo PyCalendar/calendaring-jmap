@@ -1,1 +1,0 @@
-``ical_to_jscal`` now raises ``ValueError`` when ``DTSTART`` and ``DTEND`` have mismatched value types (one ``DATE``, one ``DATE-TIME``, which RFC 5545 forbids), instead of an unexplained ``TypeError``.

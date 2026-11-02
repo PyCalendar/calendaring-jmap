@@ -1,1 +1,0 @@
-``get_availability``'s ``CalendarEvent/query`` fallback now converts each busy interval to UTC using the event's own time zone, instead of returning an offset time for any zone other than UTC.

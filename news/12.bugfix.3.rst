@@ -1,1 +1,0 @@
-``ical_to_jscal`` no longer writes a non-mailto ORGANIZER/ATTENDEE URI (e.g. ``sip:alice@example.com``) into the Participant ``email`` property, which RFC 8984 defines as an addr-spec, not an arbitrary URI. Such a participant now has ``calendarAddress`` only.

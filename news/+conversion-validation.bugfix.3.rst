@@ -1,1 +1,0 @@
-``jscal_to_ical`` now raises ``ValueError`` when the input JSCalendar dict has no ``uid`` (mandatory per RFC 8984), instead of silently emitting an iCalendar VEVENT with no ``UID`` property, which RFC 5545 forbids.

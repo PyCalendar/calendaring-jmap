@@ -1,1 +1,0 @@
-``Session`` now parses ``uploadUrl``/``downloadUrl`` from the JMAP session object, resolving a relative or mismatched-scheme URL the same way ``apiUrl`` already was.

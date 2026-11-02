@@ -1,1 +1,0 @@
-``get_availability`` no longer returns the wrong account's busy intervals when asked about more than one account.

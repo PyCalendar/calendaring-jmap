@@ -1,1 +1,0 @@
-Added ``get_availability`` on both ``JMAPClient`` and ``AsyncJMAPClient``, returning busy intervals for one or more accounts over a time period. Falls back to a ``CalendarEvent/query`` scan when ``Principal/getAvailability`` isn't supported. Checking someone else's availability by email is not supported yet.

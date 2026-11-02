@@ -1,1 +1,0 @@
-The reference pages under :file:`docs/reference/` are now generated from source with :program:`sphinx-apidoc` instead of hand-maintained. @stevepiercy

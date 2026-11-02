@@ -1,1 +1,0 @@
-Recurrence override patches now carry ``participants``, ``locations``, ``alerts``, ``status``, ``keywords``, and ``freeBusyStatus`` changes in both conversion directions, instead of silently dropping any per-occurrence change beyond title, start, duration, and description.

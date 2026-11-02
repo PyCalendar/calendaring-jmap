@@ -1,1 +1,0 @@
-``ical_to_jscal`` and ``jscal_to_ical`` now use ``recurrenceRule``/``excludedRecurrenceRule`` (singular) instead of RFC 8984's ``recurrenceRules``/``excludedRecurrenceRules`` (an array), which neither Cyrus nor Stalwart accept. Only the first RRULE/EXRULE is kept if a VEVENT has more than one.

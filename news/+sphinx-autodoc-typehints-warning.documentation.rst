@@ -1,1 +1,0 @@
-The one-off Sphinx warning about an unresolvable forward reference in ``niquests``' own type hints is suppressed locally instead of turning off warnings-as-errors project-wide; it's a bug in ``niquests``, not in calendaring-jmap.
