@@ -1,0 +1,1 @@
+Fixed broken links found by Vale's link checker, and removed unused theme files.

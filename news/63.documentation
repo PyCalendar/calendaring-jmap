@@ -1,8 +1,0 @@
-Switched to Makefile for generating, building, checking documentation, and running formatting. @stevepiercy
-- Switched to uv for managing a Python virtual environment.
-- Updated :file:`pyproject.toml` to use distinct groups, and use compatible dependency versions.
-- Added feature to generate ``.rst`` stub files from source Python files with ``make apidoc``.
-- Added feature to use ``make linkcheckbroken`` to check links in documentation, then manually fixed broken links.
-- Removed unused theme files.
-- Added templates to generate the SPDX headers from ``sphinx-apidoc``.
-- Added theme templates from icalendar.
