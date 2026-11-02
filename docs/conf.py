@@ -196,9 +196,7 @@ def _drop_private_bases(app, name, obj, options, bases):
     base was private, so the "Bases:" line never renders empty.
     """
     kept = [
-        base
-        for base in bases
-        if not (isinstance(base, str) and _PRIVATE_BASE_RE.fullmatch(base))
+        base for base in bases if not (isinstance(base, str) and _PRIVATE_BASE_RE.fullmatch(base))
     ]
     bases[:] = kept or [":py:class:`object`"]
 
