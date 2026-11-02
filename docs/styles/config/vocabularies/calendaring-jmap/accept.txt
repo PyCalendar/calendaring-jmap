@@ -25,6 +25,7 @@ niquests
 NLnet
 # NNNN
 # parens
+post-installation
 POSTs?
 # pytest
 # repo
@@ -41,6 +42,7 @@ towncrier
 unobfuscated
 # [Uu]ntrusted
 # URN
+uv
 # VCALENDAR
 # VCONFERENCE
 VEVENTs

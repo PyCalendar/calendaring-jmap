@@ -17,7 +17,7 @@ First install prerequisites on, and clone the icalendar repository to, your loca
 
 Tests, code formatting, and documentation builds and checks require that you install :program:`GNU Make`, :program:`uv`, and :program:`Git`.
 
-.. note::
+..  note::
 
     :program:`uv` handles the installation of Python and all dependencies for calendaring-jmap.
 
@@ -84,62 +84,154 @@ Docker Desktop includes all Docker tools.
 Development setup
 =================
 
-.. code-block:: bash
+To set up calendaring-jmap for development, run the following command.
 
-    git clone https://github.com/pycalendar/calendaring-jmap
-    cd calendaring-jmap
-    pip install -e ".[dev]"
-    pre-commit install
+..  code-block:: shell
 
-Running tests
-=============
+    make init
 
-Unit tests, no server required:
+Run tests
+=========
 
-.. code-block:: bash
+calendaring-jmap runs different test types, depending on the need.
 
-    pytest src/calendaring_jmap/tests/test_jmap_unit.py
 
-Integration tests, against Cyrus IMAP and Stalwart via Docker:
+Unit tests
+----------
 
-.. code-block:: bash
+Run unit tests with the following command.
 
-    tests/docker/cyrus/start.sh
-    tests/docker/stalwart/start.sh
-    pytest src/calendaring_jmap/tests/test_jmap_integration.py
+..  code-block:: shell
 
-Add a test to ``test_jmap_unit.py`` for anything that doesn't need a real server: request-building, response parsing, error handling, conversion logic. Mock HTTP with ``unittest.mock``, following ``_MockedClientMixin``'s pattern. Add a test to ``test_jmap_integration.py`` only for behavior that depends on how a real server actually responds, such as a server-specific quirk or a capability check; each test class there skips automatically when its server isn't reachable, so a missing Docker container doesn't fail CI, it just skips those tests.
+    make test-unit
 
-Previewing docs
-===============
+Add a test to :file:`src/calendaring_jmap/tests/test_jmap_unit.py` for anything that doesn't need a real server, including request-building, response parsing, error handling, and conversion logic.
+Mock HTTP requests with :program:`unittest.mock`, following the class ``_MockedClientMixin``'s pattern.
 
-.. code-block:: bash
 
-    pip install -e ".[docs]"
-    sphinx-autobuild docs docs/_build/html
+Integration tests
+-----------------
 
-Opens a local server that rebuilds and reloads the browser tab automatically as you edit files under ``docs/``.
+To run integration tests, first change file permissions on the scripts to be executable on your system.
+This command needs to be run one time only.
 
-.. _vale-check:
+..  tab-set::
 
-Checking docs prose with Vale
-=============================
+    ..  tab-item:: macOS, Linux, and Windows with WSL
 
-.. code-block:: bash
+        ..  code-block:: shell
 
-    vale sync
-    vale docs/
+            make script-executable
 
-CI runs this the same way, as a warn-only check (a failure doesn't block a PR yet): it catches a real subset of :ref:`writing-documentation`'s rules mechanically, but it isn't a substitute for reading your own diff.
+    ..  tab-item:: Windows
 
-.. _artificial-intelligence-policy:
+        ..  code-block:: shell
+
+            TBD
+
+Run integration tests against Cyrus IMAP and Stalwart via Docker with the following command.
+
+..  code-block:: shell
+
+    make tests-integration
+
+Add a test to :file:`src/calendaring_jmap/tests/test_jmap_integration.py` only for behavior that depends on how a real server actually responds, such as a server-specific quirk or a capability check.
+When its server isn't reachable, each test class automatically skips.
+This way, a missing Docker container doesn't cause CI to fail, but skips those tests.
+
+
+Build documentation
+===================
+
+To build the documentation and view a live preview in your web browser, run the following command, and open the link from your console in a web browser.
+
+..  code-block:: shell
+
+    make livehtml
+
+As you edit either Python source or documentation files, the relevant files will automatically rebuild and reload in the browser.
+
+
+..  _vale-check:
+
+Check documentation spelling, grammar, and style
+================================================
+
+calendaring-jmap uses `Vale <https://vale.sh/>`_ to check documentation spelling, grammar, and style.
+This build must be successful in the continuous integration (CI) checks described in :ref:`commits-and-prs` for your pull request to be merged.
+
+..  code-block:: shell
+
+    make vale
+
+Observe the output and adjust Vale's configuration, as described in the next section.
+
+
+..  _vale-options:
+
+Vale options
+------------
+
+Pass options to Vale in the ``VALEOPTS`` and ``VALEFILES`` environment variables.
+In the following example, run Vale to display warnings or errors only, not suggestions, in the console on a single file.
+
+..  code-block:: shell
+
+    make vale VALEOPTS="--minAlertLevel='warning'" VALEFILES="docs/index.rst"
+
+
+..  _vale-integration:
+
+Vale integration
+----------------
+
+Vale has `integrations <https://docs.vale.sh/>`_ with various IDEs.
+Integration might require installing Vale using your operating system's package manager.
+
+-   `JetBrains <https://plugins.jetbrains.com/plugin/19613-vale-cli/docs>`_
+-   `Vim <https://github.com/dense-analysis/ale>`_
+-   `VS Code <https://github.com/chrischinchilla/vale-vscode>`_
+
+
+..  _vale-configuration:
+
+Vale configuration
+------------------
+
+calendaring-jmap configures Vale in the following places:
+
+-   :file:`.vale.ini` is Vale's configuration file.
+    This file allows overriding rules or changing their severity.
+    It's configured to use the `Microsoft Writing Style Guide <https://learn.microsoft.com/en-us/style-guide/welcome/>`_ for its ease of use—especially for non-native English readers and writers—and attention to non-technical audiences.
+-   :file:`Makefile` passes options to the ``vale`` command, such as the files Vale checks.
+-   calendaring-jmap documentation uses a custom spelling dictionary, with accepted and rejected spellings in :file:`docs/styles/config/vocabularies/calendaring-jmap/`.
+    Authors should add new words and proper names using correct casing to :file:`docs/styles/config/vocabularies/icalendar/accept.txt`, sorted alphabetically and case-insensitive.
+
+    If Vale does not reject a spelling that should be rejected, then you can add it to :file:`docs/styles/config/vocabularies/calendaring-jmap/reject.txt`.
+
+    All entries in both files support regular expressions.
+    Use https://regex101.com/ with the :guilabel:`Golang` option selected to test regular expressions.
+
+    ..  seealso::
+
+        Vale's `regex guide <https://docs.vale.sh/guides/regex>`_
+
+-   Add generic spellings to accept or reject in their respective files inside the :file:`docs/styles/config/vocabularies/Base/` folder.
+
+Because it's difficult to automate good American English grammar and syntax, it's not strictly enforced.
+
+You can add terms to Vale's configuration, and submit a pull request.
+This is an easy way to become a contributor to calendaring-jmap.
+
+
+..  _artificial-intelligence-policy:
 
 Artificial intelligence policy
 ==============================
 
 calendaring-jmap follows the Python Calendaring Ecosystem's `AI policy <https://pycal.org/ai-policy/>`_. Read it before using AI to help draft a pull request.
 
-.. _commits-and-prs:
+..  _commits-and-prs:
 
 Commits and pull requests
 =========================
@@ -152,14 +244,14 @@ Write the PR description in your own words, as a short account of what you found
 
 Before opening a PR: run the full local test suite (unit and, if your change touches client/server interaction, integration against Cyrus and/or Stalwart), ``ruff check`` and ``ruff format --check``, ``mypy``, and :ref:`vale-check` if you touched any ``.rst`` page. Fix everything that comes back before asking for review, rather than leaving a known-red check for the reviewer to raise. Vale runs warn-only in CI for now, so it won't block the PR on its own, but treat its findings the same as the others. CI also builds the docs with Sphinx's warnings-as-errors flag, so a broken ``:rfc:`` role, cross-reference, or ``automodule``/``autoclass`` directive fails the PR there rather than silently deploying a broken page to Read the Docs.
 
-.. _change-log:
+..  _change-log:
 
 Change log
 ==========
 
 If your PR changes behavior, add a news fragment. CI-only and internal-refactor PRs don't need one.
 
-.. code-block:: bash
+..  code-block:: shell
 
     touch news/<issue-number>.<type>.rst
 
@@ -173,13 +265,13 @@ If you used AI to help write the change, briefly disclose it in the fragment, pe
 
 To preview what the change log will look like:
 
-.. code-block:: bash
+..  code-block:: shell
 
     towncrier build --draft --version 0.0.0
 
 If you're unsure whether your PR needs a fragment, ask a maintainer for the ``skip-changelog`` label rather than skipping silently.
 
-.. _code-style:
+..  _code-style:
 
 Code style
 ==========
@@ -202,7 +294,7 @@ RFC citations
 
     ``:rfc:`` only renders correctly in docstrings that Sphinx's ``automodule``/autodoc actually pulls in (check ``docs/reference/*.rst`` for which modules that is; private, underscore-prefixed modules aren't autodoc'd, so a role there is only for source readers, not the built docs). Plain ``#``-comments are never RST-parsed, and neither are docstrings inside ``tests/``, so use plain "RFC NNNN section N.N" text in both, not the role.
 
-.. _prose-docstrings-comments:
+..  _prose-docstrings-comments:
 
 Prose in docstrings and comments
     Write plainly and specifically: say what's actually true about this code, not a general description that could apply to any project. Pick the punctuation a sentence actually needs instead of leaning on an em dash or a spaced hyphen (``word - word``) as a stand-in for a colon, comma, or period; the same goes for the Unicode arrow ``→`` used as shorthand for "produces" or "maps to," which reads clearer written out, or as ASCII ``->`` inside a code example where alignment matters.
@@ -212,7 +304,7 @@ Prose in docstrings and comments
 Dead code
     Before adding a new helper, check whether an existing one already does the job. If your change makes a function unreachable, remove it in the same PR rather than leaving it for a future cleanup pass; check the milestone tracker first in case a near-term feature already claims it.
 
-.. _writing-documentation:
+..  _writing-documentation:
 
 Writing documentation
 =====================
@@ -244,7 +336,7 @@ Prose style for pages
 Cross-referencing and code examples
     Link between pages with ``:doc:`` and an explicit relative path (``:doc:`../explanation/design```). Reference a class or method with ``:class:``/``:meth:`` and a leading ``~`` for a short display name (``:class:`~calendaring_jmap.objects.calendar.JMAPCalendar```). Cite an RFC the same way :ref:`code-style`'s "RFC citations" rule describes for docstrings, merging the section into the role.
 
-    Use ``.. code-block:: python`` or ``.. code-block:: bash``, with a blank line before and after the directive and the indented block. A tutorial ends with an explicit "Next steps" section linking forward to relevant how-to/explanation pages, matching ``tutorials/quickstart.rst``.
+    Use ``..  code-block:: python`` or ``..  code-block:: shell``, with a blank line before and after the directive and the indented block. A tutorial ends with an explicit "Next steps" section linking forward to relevant how-to/explanation pages, matching ``tutorials/quickstart.rst``.
 
 Title underlines
     RST title underlines must match the title's exact character width. Sphinx only warns about this for a page title's overline/underline pair, not for an ordinary section heading's underline alone, so a mismatched section underline builds silently; count it yourself rather than assume a clean build means it's correct.

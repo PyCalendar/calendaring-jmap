@@ -168,8 +168,27 @@ docs-all: .venv apidoc clean vale doctest docstring html linkcheckbroken  ## Cle
 test: .venv  ## Run code tests
 	@uv run pytest
 
+.PHONY: test-unit
+test-unit: .venv  ## Run code unit tests
+	@uv run pytest src/calendaring_jmap/tests/test_jmap_unit.py
+
+.PHONY: script-executable
+script-executable: .venv  ## Change file permissions on the Bash scripts to be executable
+	@chmod +x tests/docker/cyrus/setup_cyrus.sh \
+	tests/docker/cyrus/start.sh \
+	tests/docker/cyrus/stop.sh \
+	tests/docker/stalwart/setup_stalwart.sh \
+	tests/docker/stalwart/start.sh \
+	tests/docker/stalwart/stop.sh;
+
+.PHONY: test-integration
+test-integration: .venv  ## Run code unit tests
+	tests/docker/cyrus/start.sh
+	tests/docker/stalwart/start.sh
+	@uv run pytest src/calendaring_jmap/tests/test_jmap_integration.py
+
 .PHONY: test-coverage
-test-coverage: .venv  ## Run code tests and coverage
+test-coverage: .venv  ## Run code unit tests with coverage
 	@uv run pytest --cov --cov-branch --cov-report=xml \
             --junitxml=junit.xml -o junit_family=legacy \
             src/calendaring_jmap/tests/test_jmap_unit.py
