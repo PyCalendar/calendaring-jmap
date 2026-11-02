@@ -13,7 +13,7 @@ Contributors to calendaring-jmap follow the Python Calendaring Ecosystem's `Code
 Prerequisites
 =============
 
-First install prerequisites on, and clone the icalendar repository to, your local computer.
+First install prerequisites on, and clone the calendaring-jmap repository to, your local computer.
 
 Tests, code formatting, and documentation builds and checks require that you install :program:`GNU Make`, :program:`uv`, and :program:`Git`.
 
@@ -115,25 +115,15 @@ Integration tests
 To run integration tests, first change file permissions on the scripts to be executable on your system.
 This command needs to be run one time only.
 
-..  tab-set::
+..  code-block:: shell
 
-    ..  tab-item:: macOS, Linux, and Windows with WSL
-
-        ..  code-block:: shell
-
-            make script-executable
-
-    ..  tab-item:: Windows
-
-        ..  code-block:: shell
-
-            TBD
+    make script-executable
 
 Run integration tests against Cyrus IMAP and Stalwart via Docker with the following command.
 
 ..  code-block:: shell
 
-    make tests-integration
+    make test-integration
 
 Add a test to :file:`src/calendaring_jmap/tests/test_jmap_integration.py` only for behavior that depends on how a real server actually responds, such as a server-specific quirk or a capability check.
 When its server isn't reachable, each test class automatically skips.
@@ -202,10 +192,10 @@ calendaring-jmap configures Vale in the following places:
 
 -   :file:`.vale.ini` is Vale's configuration file.
     This file allows overriding rules or changing their severity.
-    It's configured to use the `Microsoft Writing Style Guide <https://learn.microsoft.com/en-us/style-guide/welcome/>`_ for its ease of use—especially for non-native English readers and writers—and attention to non-technical audiences.
+    It's configured to use the `Microsoft Writing Style Guide <https://learn.microsoft.com/en-us/style-guide/welcome/>`_ for its ease of use, especially for non-native English readers and writers, and attention to non-technical audiences.
 -   :file:`Makefile` passes options to the ``vale`` command, such as the files Vale checks.
 -   calendaring-jmap documentation uses a custom spelling dictionary, with accepted and rejected spellings in :file:`docs/styles/config/vocabularies/calendaring-jmap/`.
-    Authors should add new words and proper names using correct casing to :file:`docs/styles/config/vocabularies/icalendar/accept.txt`, sorted alphabetically and case-insensitive.
+    Authors should add new words and proper names using correct casing to :file:`docs/styles/config/vocabularies/calendaring-jmap/accept.txt`, sorted alphabetically and case-insensitive.
 
     If Vale does not reject a spelling that should be rejected, then you can add it to :file:`docs/styles/config/vocabularies/calendaring-jmap/reject.txt`.
 
@@ -242,7 +232,7 @@ Keep each commit to one concern. A PR that both fixes a bug and refactors an unr
 
 Write the PR description in your own words, as a short account of what you found and did, not a restatement of the linked issue's own text back at its author, and not a bullet-by-bullet checklist. If the work turned up real bugs along the way, describe the fix; don't frame the PR as "here's how many bugs I found," even when true, that framing reads as padding a body's length rather than reporting the work.
 
-Before opening a PR: run the full local test suite (unit and, if your change touches client/server interaction, integration against Cyrus and/or Stalwart), ``ruff check`` and ``ruff format --check``, ``mypy``, and :ref:`vale-check` if you touched any ``.rst`` page. Fix everything that comes back before asking for review, rather than leaving a known-red check for the reviewer to raise. Vale runs warn-only in CI for now, so it won't block the PR on its own, but treat its findings the same as the others. CI also builds the docs with Sphinx's warnings-as-errors flag, so a broken ``:rfc:`` role, cross-reference, or ``automodule``/``autoclass`` directive fails the PR there rather than silently deploying a broken page to Read the Docs.
+Before opening a PR: run the full local test suite (unit and, if your change touches client/server interaction, integration against Cyrus and/or Stalwart), ``ruff check`` and ``ruff format --check``, ``mypy``, and :ref:`vale-check` if you touched any ``.rst`` page. Fix everything that comes back before asking for review, rather than leaving a known-red check for the reviewer to raise. Vale blocks the PR in CI on an error-level finding, same as the other checks; a warning or suggestion doesn't fail the build, but fix those too before asking for review. CI also builds the docs with Sphinx's warnings-as-errors flag, so a broken ``:rfc:`` role, cross-reference, or ``automodule``/``autoclass`` directive fails the PR there rather than silently deploying a broken page to Read the Docs.
 
 ..  _change-log:
 
@@ -292,7 +282,7 @@ RFC citations
 
     A spec that has no RFC number yet (``draft-ietf-jmap-calendars`` as of this writing) can't use ``:rfc:``, since the role links to ``datatracker.ietf.org/doc/html/rfcNNNN.html`` and there's no such page yet. Cite it as plain text (``draft-ietf-jmap-calendars section 2.2``) until it's assigned a number, then convert it.
 
-    ``:rfc:`` only renders correctly in docstrings that Sphinx's ``automodule``/autodoc actually pulls in (check ``docs/reference/*.rst`` for which modules that is; private, underscore-prefixed modules aren't autodoc'd, so a role there is only for source readers, not the built docs). Plain ``#``-comments are never RST-parsed, and neither are docstrings inside ``tests/``, so use plain "RFC NNNN section N.N" text in both, not the role.
+    ``:rfc:`` only renders correctly in docstrings that Sphinx's ``automodule``/autodoc actually pulls in (check ``docs/reference/api/*.rst`` for which modules that is; private, underscore-prefixed modules aren't autodoc'd, so a role there is only for source readers, not the built docs). Plain ``#``-comments are never RST-parsed, and neither are docstrings inside ``tests/``, so use plain "RFC NNNN section N.N" text in both, not the role.
 
 ..  _prose-docstrings-comments:
 
@@ -335,7 +325,7 @@ Prose style for pages
 
     .. vale Vale.Spelling = YES
 
-    :ref:`vale-check` runs the Microsoft Vale style package plus `signs-of-ai-writing <https://github.com/ammil-industries/vale-signs-of-ai-writing>`_ (patterns from Wikipedia's `Signs of AI writing <https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing>`_ essay) in CI, catching a real subset of these rules mechanically: contractions, passive voice, dash spacing, sentence-case headings, hedging clusters, chatbot phrases, and the AI-typical vocabulary and symbolic-language patterns the essay documents. It doesn't catch everything: the Diátaxis category choice and whether a how-to page pushed "why" content where it belongs still need a reviewer's judgment.
+    :ref:`vale-check` runs the Microsoft Vale style package in CI, catching a real subset of these rules mechanically: contractions, passive voice, dash spacing, and sentence-case headings. It doesn't catch everything: the Diátaxis category choice and whether a how-to page pushed "why" content where it belongs still need a reviewer's judgment.
 
 Cross-referencing and code examples
     Link between pages with ``:doc:`` and an explicit relative path (``:doc:`../explanation/design```). Reference a class or method with ``:class:``/``:meth:`` and a leading ``~`` for a short display name (``:class:`~calendaring_jmap.objects.calendar.JMAPCalendar```). Cite an RFC the same way :ref:`code-style`'s "RFC citations" rule describes for docstrings, merging the section into the role.

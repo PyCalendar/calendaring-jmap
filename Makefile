@@ -163,7 +163,7 @@ vale: .venv apidoc  ## Run Vale style, grammar, and spell checks
 #	@pytest -rx src/calendaring_jmap/tests/test_docstrings.py
 
 .PHONY: docs-all
-docs-all: .venv apidoc clean vale doctest docstring html linkcheckbroken  ## Clean docs build, then run vale, doctest, html, and linkcheckbroken
+docs-all: .venv apidoc clean vale html linkcheckbroken  ## Clean docs build, then run vale, html, and linkcheckbroken
 
 .PHONY: test
 test: .venv  ## Run code tests

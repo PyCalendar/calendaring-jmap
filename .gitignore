@@ -59,9 +59,6 @@ htmlcov/
 # Generated version file
 src/calendaring_jmap/_version.py
 
-# uv lock file
-uv.lock
-
 # Docs build
 _build/
 

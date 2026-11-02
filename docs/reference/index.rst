@@ -7,7 +7,7 @@ Reference
 .. meta::
    :description: This section contains reference material for the calendaring_jmap API, including get_jmap_client, get_async_jmap_client, and get_connection_params as the top-level functions that read configuration and return a connected client.
 
-This section contains reference material for the ``calendaring_jmap`` API, including :mod:`~calendaring_jmap.get_jmap_client`, :mod:`~calendaring_jmap.get_async_jmap_client`, and :mod:`~calendaring_jmap.get_connection_params` as the top-level functions that read configuration and return a connected client.
+This section contains reference material for the ``calendaring_jmap`` API, including :func:`~calendaring_jmap.get_jmap_client`, :func:`~calendaring_jmap.get_async_jmap_client`, and :func:`~calendaring_jmap.get_connection_params` as the top-level functions that read configuration and return a connected client.
 
 API reference
 -------------
