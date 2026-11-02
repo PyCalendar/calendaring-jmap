@@ -174,20 +174,32 @@ autodoc_default_options = {
 }
 
 
-_PRIVATE_BASE_RE = re.compile(r":py:class:`~?[\w.]*\.?(_\w+)`")
+# Matches only a full, final dotted-path segment starting with "_"
+# (e.g. the "_JMAPClientBase" in "~pkg.client._JMAPClientBase"), not a
+# role whose class name merely contains an underscore partway through
+# (e.g. "My_Public_Thing" must not match).
+_PRIVATE_BASE_RE = re.compile(r":py:class:`~?(?:\w+\.)*(_\w+)`")
 
 
 def _drop_private_bases(app, name, obj, options, bases):
     """Keep a private base (e.g. ``_JMAPClientBase``) off the rendered
     "Bases:" line; ``show-inheritance`` otherwise renders it as-is.
 
-    By the time this event fires, each entry in ``bases`` is already a
-    rendered ``:py:class:`...``` role string, not a class object, so the
-    check matches the role's own target name rather than ``__name__``.
-    Falls back to ``object`` if every base was private, so the "Bases:"
-    line never renders empty.
+    By the time this event fires (confirmed on Sphinx 9.2.0), each entry
+    in ``bases`` is already a rendered ``:py:class:`...``` role string,
+    not a class object, so the check matches the role's own target name
+    rather than ``__name__``. If a future Sphinx version reverts to
+    passing class objects, a non-string entry here is left alone rather
+    than raising, so this degrades to a silent no-op instead of a build
+    failure; check the rendered reference pages after any Sphinx upgrade
+    to confirm this still filters. Falls back to ``object`` if every
+    base was private, so the "Bases:" line never renders empty.
     """
-    kept = [base for base in bases if not _PRIVATE_BASE_RE.fullmatch(base)]
+    kept = [
+        base
+        for base in bases
+        if not (isinstance(base, str) and _PRIVATE_BASE_RE.fullmatch(base))
+    ]
     bases[:] = kept or [":py:class:`object`"]
 
 
