@@ -16,6 +16,8 @@ dicts?
 docstrings?
 draft-ietf-calext-jscalendar-icalendar
 else's
+eMudhra
+emSign
 # filename
 hardcoding
 i[Cc]alendar
@@ -30,6 +32,8 @@ NLnet
 post-installation
 POSTs?
 pytest's?
+README's
+READMEs'?
 repo
 RFC's
 # RST
@@ -47,5 +51,6 @@ unobfuscated
 uv
 # VCALENDAR
 # VCONFERENCE
-VEVENTs
+VEVENTs?
+VEVENT's
 Xcode
