@@ -1,1 +1,0 @@
-``ical_to_jscal`` now emits a ``sendTo`` property on every participant, alongside the existing ``calendarAddress``. Current Cyrus rejects any participant without ``sendTo``, on both create and update, regardless of scheduling messages.

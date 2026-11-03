@@ -1,1 +1,0 @@
-``get_address_books`` now marks an account's sole address book as default when the server reports none as default. Cyrus omits ``isDefault`` entirely instead of sending ``false``, so the one address book an account actually has was never flagged default.

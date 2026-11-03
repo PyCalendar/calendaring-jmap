@@ -1,1 +1,0 @@
-``create_event``/``update_event`` now retry with the other ``recurrenceRule``/``recurrenceRules`` spelling when the server rejects the one they sent. Current Cyrus requires the plural array form. Stalwart still requires the singular form, so no single hardcoded spelling could satisfy both servers.

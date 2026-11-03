@@ -18,6 +18,25 @@ Every calendaring-jmap release, newest first: new features, bug fixes, breaking 
 
 .. towncrier release notes start
 
+2.0.1 (2026-11-03)
+------------------
+
+Bug fixes
+~~~~~~~~~
+
+- ``accept_invitation``/``decline_invitation``/``tentatively_accept`` no longer crash with ``AttributeError`` when an event has no ``participants`` property at all. They now raise ``JMAPMethodError`` with ``notFound``, as documented.
+- ``create_event``/``update_event`` now retry with the other ``recurrenceRule``/``recurrenceRules`` spelling when the server rejects the one they sent. Current Cyrus requires the plural array form. Stalwart still requires the singular form, so no single hardcoded spelling could satisfy both servers.
+- ``get_address_books`` now marks an account's sole address book as default when the server reports none as default. Cyrus omits ``isDefault`` entirely instead of sending ``false``, so the one address book an account actually has was never flagged default.
+- ``ical_to_jscal`` no longer emits a ``version`` property on created/updated events. Current Cyrus rejects it outright with ``invalidProperties``. RFC 8984 marks the property optional, so leaving it out is correct.
+- ``ical_to_jscal`` now emits a ``sendTo`` property on every participant, alongside the existing ``calendarAddress``. Current Cyrus rejects any participant without ``sendTo``, on both create and update, regardless of scheduling messages.
+
+
+Documentation
+~~~~~~~~~~~~~
+
+- Added :program:`sphinx-llms-txt` for generating LLMS-friendly files. @stevepiercy (`#85 <https://github.com/pycalendar/calendaring-jmap/issues/85>`_)
+
+
 2.0.0 (2026-11-02)
 ------------------
 

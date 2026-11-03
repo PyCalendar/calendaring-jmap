@@ -1,1 +1,0 @@
-``ical_to_jscal`` no longer emits a ``version`` property on created/updated events. Current Cyrus rejects it outright with ``invalidProperties``. RFC 8984 marks the property optional, so leaving it out is correct.
