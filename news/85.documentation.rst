@@ -1,0 +1,1 @@
+Added :program:`sphinx-llms-txt` for generating LLMS-friendly files. @stevepiercy

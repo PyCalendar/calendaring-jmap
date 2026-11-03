@@ -32,7 +32,6 @@ author = "calendaring-jmap contributors"
 
 extensions = [
     "notfound.extension",
-    # "sphinx.ext.apidoc",
     "sphinx.ext.autodoc",
     "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
@@ -42,6 +41,7 @@ extensions = [
     "sphinx_design",
     "sphinx_issues",
     "sphinx_last_updated_by_git",
+    "sphinx_llms_txt",
     "sphinxext.opengraph",
 ]
 source_suffix = {".rst": "restructuredtext"}
@@ -129,40 +129,6 @@ if not os.environ.get("READTHEDOCS"):
     notfound_urls_prefix = "/"
 
 
-# -- sphinx.ext.apidoc configuration -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/extensions/apidoc.html#
-# This extension automatically generates API documentation from docstrings,
-# writing the source .rst files to the specified destination directory.
-# These files can't be customized to insert the SPDX headers.
-#
-# Steve tried copying their templates from
-# `site-packages/sphinx/templates/apidoc/*.rst.jinja` to `_templates`
-# and renaming them with various suffices without any luck. Editing
-# the templates in their package worked, but that's not maintainable.
-#
-# The options are:
-# 1. Don't use SPDX headers, follow icalendar with its use of sphinx.ext.apidoc,
-#    and .gitignore the output `reference/api` directory.
-# 2. Copy and modify the templates, which may drift in the future and
-#    we'd never know, and use sphinx-apidoc with a new Make target.
-# apidoc_modules = [
-#     {
-#         "path": "../src/calendaring_jmap",
-#         "destination": "reference/api",
-#         "exclude_patterns": [
-#             # "**/tests*",
-#         ],
-#         "separate_modules": True,
-#         "automodule_options": {
-#             "ignore-module-all",
-#             "members",
-#             "show-inheritance",
-#             "undoc-members",
-#         },
-#     }
-# ]
-
-
 # -- sphinx.ext.autodoc configuration ------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/autodoc.html
 autoclass_content = "both"
@@ -237,6 +203,9 @@ issues_github_path = "pycalendar/calendaring-jmap"
 
 # -- sphinx_last_updated_by_git configuration -------------------------
 html_last_updated_fmt = "%Y-%m-%d"
+
+
+# -- sphinx_llms_txt configuration -------------------------
 
 
 # -- sphinxext.opengraph configuration -----------------------------------------
