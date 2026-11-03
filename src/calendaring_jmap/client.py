@@ -359,11 +359,10 @@ class _JMAPClientBase:
         matches ``participant_email`` and a different participant matches
         ``participant_role`` still matches both conditions.
 
-        Cyrus drops a Link's ``rel: "enclosure"`` on read-back (seen against
-        a running instance), so ``has_attachment=True`` undercounts real
-        attachments there. Both Cyrus and Stalwart drop the ``attendee``
-        role from a participant's ``roles`` map, so
-        ``participant_role="attendee"`` undercounts on both servers.
+        Stalwart drops the ``attendee`` role from a participant's ``roles``
+        map entirely (confirmed live: the key is absent, not ``False``), so
+        ``participant_role="attendee"`` undercounts there; current Cyrus
+        keeps the role and matches correctly.
         """
         if has_attachment is not None:
             links = (event_data.get("links") or {}).values()
