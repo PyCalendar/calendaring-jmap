@@ -1,0 +1,1 @@
+``accept_invitation``/``decline_invitation``/``tentatively_accept`` no longer crash with ``AttributeError`` when an event has no ``participants`` property at all. They now raise ``JMAPMethodError`` with ``notFound``, as documented.

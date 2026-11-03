@@ -6,8 +6,13 @@ services:
     # No versioned release tags exist for this image, only latest/bookworm/master
     # (all identical, rebuilt from current Cyrus master). Pinned to a digest
     # instead of :latest so the JSCalendar/JMAP behavior this repo tests against
-    # doesn't drift out from under it; bump deliberately when needed.
-    image: ghcr.io/cyrusimap/cyrus-docker-test-server@sha256:a3c8a451bde22f46a8b06fb6b335370c0ab23960950b84874aed972b64af3997
+    # doesn't drift out from under it; bump deliberately when needed. Same
+    # digest as .github/workflows/integration.yml's own pin, confirmed live
+    # that these two files had drifted onto different digests with opposite,
+    # incompatible JSCalendar "version" property requirements (one rejects
+    # it outright, the other requires it), making a local make test-integration
+    # run fail against a fix verified correct in CI. Keep both pins in sync.
+    image: ghcr.io/cyrusimap/cyrus-docker-test-server@sha256:d639a9116691a7a1c875073486c419d60843e5ef8e32e65c5ef56283874dbf2c
     container_name: cyrus-test
     ports:
       - "8802:8080"  # HTTP (JMAP)

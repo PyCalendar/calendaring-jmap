@@ -50,7 +50,18 @@ def parse_address_book_get(response_args: dict) -> list[JMAPAddressBook]:
         List of ``JMAPAddressBook``.
         Empty if ``"list"`` is absent or empty.
     """
-    return [JMAPAddressBook.from_jmap(item) for item in response_args.get("list", [])]
+    books = [JMAPAddressBook.from_jmap(item) for item in response_args.get("list", [])]
+    # RFC 9610 section 2 requires isDefault to be present and true for
+    # exactly one AddressBook in the account; confirmed live that Cyrus's
+    # current image omits the key entirely rather than sending it false,
+    # which JMAPAddressBook.from_jmap otherwise reads as "not default" even
+    # for the account's only address book. When there is exactly one
+    # AddressBook and none of them actually claimed isDefault, it is the de
+    # facto default regardless of what the server sent, so mark it rather
+    # than reporting a default-less account the spec says can't happen.
+    if len(books) == 1 and not books[0].is_default:
+        books[0].is_default = True
+    return books
 
 
 def build_contact_query(

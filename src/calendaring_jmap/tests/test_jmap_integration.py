@@ -1126,9 +1126,15 @@ class TestJMAPEventIntegration:
                 event_client.delete_event(event_id)
 
     def test_recurring_event_create_get_update(self, event_client, event_calendar_id, server):
-        """Neither test server accepts RFC 8984's recurrenceRules array; both
-        want the singular recurrenceRule instead (see ical_to_jscal.py). This
-        is the only integration coverage for recurring events at all."""
+        """Which of RFC 8984's recurrenceRule (singular)/recurrenceRules
+        (plural array) spelling a server actually accepts on
+        CalendarEvent/set, and returns on CalendarEvent/get, is not
+        consistent between the two test servers this project targets or
+        stable over time for a given server (see
+        _JMAPClientBase._try_recurrence_rule_fallback_key in client.py), so
+        this asserts the round-trip behavior that must hold regardless of
+        spelling, not a specific key name. This is the only integration
+        coverage for recurring events at all."""
         ical = _recurring_ical(
             "FREQ=WEEKLY;BYDAY=MO,WE,FR",
             title="Weekly Standup",
@@ -1139,15 +1145,14 @@ class TestJMAPEventIntegration:
         )
         try:
             obj = event_client.get_event(event_id)
-            assert "recurrenceRule" in obj.get_data(), (
+            assert "RRULE" in jscal_to_ical(obj.get_data()), (
                 f"{server}: created event lost its recurrence rule on read-back."
             )
-            assert "RRULE" in jscal_to_ical(obj.get_data())
 
             updated_ical = ical.replace("Weekly Standup", "Weekly Standup Renamed")
             event_client.update_event(event_id, ical_to_jscal(updated_ical))
             updated = event_client.get_event(event_id)
-            assert "recurrenceRule" in updated.get_data(), (
+            assert "RRULE" in jscal_to_ical(updated.get_data()), (
                 f"{server}: recurrence rule was lost after an unrelated update."
             )
             assert "Weekly Standup Renamed" in jscal_to_ical(updated.get_data())
@@ -1175,7 +1180,15 @@ class TestJMAPEventIntegration:
         call, including a no-op write, matching draft-ietf-jmap-calendars
         section 5.9's "the server sets updated to the current time on
         every create or update," not only on a change that alters
-        something."""
+        something.
+
+        ``sequence`` is excluded too: confirmed live that Cyrus also bumps
+        it on this same no-op write, even though RFC 8984 section 4.1.7
+        requires it to increment only "every time a change is made to the
+        object," which a byte-for-byte unchanged write-back is not. This is
+        a real Cyrus spec violation, not a bug in this client; Stalwart
+        leaves sequence unchanged here, confirmed live.
+        """
         event_id, _, _ = event_client.create_event(
             event_calendar_id,
             _minimal_event("Write Back Unchanged Event", calendar_id=event_calendar_id),
@@ -1184,18 +1197,16 @@ class TestJMAPEventIntegration:
             original = event_client.get_event(event_id).get_data()
             event_client.update_event(event_id, original)
             refetched = event_client.get_event(event_id).get_data()
-            assert {k: v for k, v in refetched.items() if k != "updated"} == {
-                k: v for k, v in original.items() if k != "updated"
+            excluded = {"updated", "sequence"}
+            assert {k: v for k, v in refetched.items() if k not in excluded} == {
+                k: v for k, v in original.items() if k not in excluded
             }
         finally:
             event_client.delete_event(event_id)
 
     def test_attach_property_roundtrip(self, event_client, event_calendar_id, server):
         """ical_to_jscal/jscal_to_ical convert ATTACH <-> links (rel:
-        "enclosure"). On Cyrus, the fetched event's ATTACH is lost on the
-        way back out, since it doesn't persist rel (see
-        JMAPAttachment.is_attachment); Stalwart round-trips correctly.
-        """
+        "enclosure")."""
         ical = _vevent_ical(
             "Attach Roundtrip Event",
             datetime(2026, 7, 20, 9, 0, 0, tzinfo=timezone.utc),
@@ -1207,15 +1218,9 @@ class TestJMAPEventIntegration:
         )
         try:
             fetched = jscal_to_ical(event_client.get_event(event_id).get_data())
-            if server == "cyrus":
-                assert "ATTACH" not in fetched, (
-                    "cyrus: if this now finds ATTACH, Cyrus may have fixed "
-                    "the rel persistence bug; update this test accordingly."
-                )
-            else:
-                assert "ATTACH" in fetched
-                assert "https://example.com/report.pdf" in fetched
-                assert "application/pdf" in fetched
+            assert "ATTACH" in fetched
+            assert "https://example.com/report.pdf" in fetched
+            assert "application/pdf" in fetched
         finally:
             event_client.delete_event(event_id)
 
@@ -1242,12 +1247,12 @@ class TestJMAPEventIntegration:
 
     def test_virtual_location_description_roundtrip(self, event_client, event_calendar_id, server):
         """VirtualLocation.description (via a VCONFERENCE correlated to its
-        sibling CONFERENCE by URI) round-trips on Stalwart. Cyrus, tested
-        directly, rejects description on a VirtualLocation outright with
-        invalidProperties, on both create and update, independent of
-        descriptionContentType or VCONFERENCE entirely; this is a real
-        Cyrus limitation on a valid RFC 8984 property, not a bug in this
-        conversion.
+        sibling CONFERENCE by URI) round-trips on both Cyrus and Stalwart.
+
+        Cyrus still drops a top-level VirtualLocation's own features and
+        descriptionContentType on read-back, confirmed live, even though it
+        no longer rejects description outright (an earlier build did).
+        Stalwart round-trips all three properties correctly.
         """
         ical = _vevent_ical(
             "VConference Roundtrip Event",
@@ -1261,17 +1266,6 @@ class TestJMAPEventIntegration:
                 "END:VCONFERENCE\r\n"
             ),
         )
-        if server == "cyrus":
-            with pytest.raises(JMAPMethodError) as exc_info:
-                event_client.create_event(
-                    event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
-                )
-            assert exc_info.value.error_type == "invalidProperties", (
-                "cyrus: if this now accepts VirtualLocation.description, "
-                "Cyrus may have fixed this limitation; update this test "
-                "accordingly."
-            )
-            return
         event_id, _, _ = event_client.create_event(
             event_calendar_id, ical_to_jscal(ical, calendar_id=event_calendar_id)
         )
@@ -1279,17 +1273,38 @@ class TestJMAPEventIntegration:
             data = event_client.get_event(event_id).get_data()
             vloc = next(iter(data["virtualLocations"].values()))
             assert vloc["description"] == "<b>Join here</b>"
-            assert vloc["descriptionContentType"] == "text/html"
+            if server == "cyrus":
+                assert "descriptionContentType" not in vloc, (
+                    f"{server}: VirtualLocation kept its descriptionContentType; "
+                    "if this now holds, Cyrus may have fixed this limitation "
+                    "and this assertion should be updated."
+                )
+                assert "features" not in vloc, (
+                    f"{server}: VirtualLocation kept its features map; if "
+                    "this now holds, Cyrus may have fixed this limitation "
+                    "and this assertion should be updated."
+                )
+            else:
+                assert vloc["descriptionContentType"] == "text/html"
+                assert vloc["features"] == {"audio": True}
         finally:
             event_client.delete_event(event_id)
 
     def test_recurrence_override_combines_multiple_property_changes(
-        self, event_client, event_calendar_id
+        self, event_client, event_calendar_id, server
     ):
         """A single override instance changing status, free/busy status,
         keywords, location, and virtualLocations together round-trips
         through CalendarEvent/set and CalendarEvent/get with every change
         preserved.
+
+        Cyrus drops a VirtualLocation's features map specifically inside a
+        recurrenceOverrides patch (confirmed live: the uri survives,
+        features does not), even though the same features map round-trips
+        fine on a top-level, non-override virtualLocation (see
+        test_virtual_location_description_roundtrip and this converter's
+        own pure client-side round trip, which keeps FEATURE intact with
+        no server involved). Stalwart has no such gap.
         """
         master_start = datetime(2026, 8, 3, 9, 0, 0, tzinfo=timezone.utc)
         override_start = master_start + timedelta(weeks=1)
@@ -1328,20 +1343,32 @@ class TestJMAPEventIntegration:
             assert "URGENT" in child.upper() and "ESCALATED" in child.upper()
             assert "LOCATION:Room 200" in child
             assert "CONFERENCE" in child
-            assert "PHONE" in child
+            if server == "cyrus":
+                assert "FEATURE" not in child, (
+                    f"{server}: override VirtualLocation kept its FEATURE "
+                    "parameter; if this now holds, Cyrus may have fixed the "
+                    "features-drop limitation on override VirtualLocations "
+                    "and this assertion should be updated."
+                )
+            else:
+                assert "PHONE" in child
         finally:
             event_client.delete_event(event_id)
 
     def test_recurrence_override_participant_and_alert_server_quirks(
         self, event_client, event_calendar_id, server
     ):
-        """The same attendee-role-drop and alert-action-drop quirks already
-        known for top-level participants/alerts (see _invite_ical's own
-        docstring, and the Alert action default in
-        jscal_to_ical._alert_to_valarm) reproduce identically inside a
-        recurrenceOverrides patch on both Cyrus and Stalwart. Pinned here so
-        a future server fix is caught rather than silently going
-        unnoticed.
+        """The alert-action-drop quirk already known for top-level alerts
+        (see the Alert action default in jscal_to_ical._alert_to_valarm)
+        reproduces identically inside a recurrenceOverrides patch on both
+        Cyrus and Stalwart. Pinned here so a future server fix is caught
+        rather than silently going unnoticed.
+
+        The matching attendee-role-drop quirk (#57) no longer reproduces on
+        Cyrus's current image, confirmed live: an override participant now
+        keeps its attendee role on read-back, where an earlier build
+        dropped it. Stalwart's own behavior here is untouched by this
+        change and still covered below.
 
         The master VEVENT here has no ORGANIZER/ATTENDEE/VALARM of its own,
         so Cyrus returns this patch's participants/alerts as literal
@@ -1381,12 +1408,19 @@ class TestJMAPEventIntegration:
                 p for p in participants.values() if p.get("email") == "attendee@example.com"
             )
             roles = attendee.get("roles") or {}
-            assert "attendee" not in roles, (
-                f"{server}: override participant kept its attendee role; "
-                "if this now holds, the server may have fixed the "
-                "long-standing roles-drop quirk (see #57) and this "
-                "assertion should be updated."
-            )
+            if server == "stalwart":
+                assert "attendee" not in roles, (
+                    f"{server}: override participant kept its attendee role; "
+                    "if this now holds, the server may have fixed the "
+                    "long-standing roles-drop quirk (see #57) and this "
+                    "assertion should be updated."
+                )
+            else:
+                assert roles.get("attendee") is True, (
+                    f"{server}: override participant lost its attendee role again; "
+                    "if this now holds, the #57 roles-drop quirk may have "
+                    "returned and this assertion should be updated."
+                )
 
             alerts = patch.get("alerts") or {}
             assert alerts, "alert was dropped entirely from the override patch"
@@ -1698,9 +1732,6 @@ class TestAttachmentIntegration:
             event_client.delete_event(event_id)
 
     def test_get_event_attachments_finds_attachment(self, event_client, event_calendar_id, server):
-        """Cyrus doesn't reliably persist rel: "enclosure" (see
-        JMAPAttachment.is_attachment), so it finds nothing here even though
-        attach_to_event succeeded; Stalwart finds the attachment."""
         data = b"attachment content for get_event_attachments test"
         event_id, _, _ = event_client.create_event(
             event_calendar_id,
@@ -1710,17 +1741,10 @@ class TestAttachmentIntegration:
             blob_id = event_client.upload_attachment(data, "application/octet-stream")
             event_client.attach_to_event(event_id, blob_id, "test.bin", "application/octet-stream")
             attachments = event_client.get_event_attachments(event_id)
-            if server == "cyrus":
-                assert attachments == [], (
-                    "cyrus: if this now finds the attachment, Cyrus may have "
-                    "fixed the rel persistence bug; update this test and "
-                    "JMAPAttachment.is_attachment's docstring accordingly."
-                )
-            else:
-                assert len(attachments) == 1, f"{server}: expected exactly one attachment"
-                assert attachments[0].title == "test.bin"
-                assert attachments[0].content_type == "application/octet-stream"
-                assert attachments[0].href
+            assert len(attachments) == 1, f"{server}: expected exactly one attachment"
+            assert attachments[0].title == "test.bin"
+            assert attachments[0].content_type == "application/octet-stream"
+            assert attachments[0].href
         finally:
             event_client.delete_event(event_id)
 
@@ -1743,7 +1767,7 @@ class TestAsyncAttachmentIntegration:
     @pytest.mark.asyncio
     async def test_attach_to_event_persists_href(self, async_client, async_calendar_id):
         """Cyrus-only class; asserts on the raw links data rather than
-        get_event_attachments, see test_get_event_attachments_empty_on_cyrus_due_to_rel_bug."""
+        get_event_attachments, see test_get_event_attachments_finds_attachment."""
         data = b"async binary content for attachment test"
         event_id, _, _ = await async_client.create_event(
             async_calendar_id,
@@ -1769,9 +1793,7 @@ class TestAsyncAttachmentIntegration:
             await async_client.delete_event(event_id)
 
     @pytest.mark.asyncio
-    async def test_get_event_attachments_empty_on_cyrus_due_to_rel_bug(
-        self, async_client, async_calendar_id
-    ):
+    async def test_get_event_attachments_finds_attachment(self, async_client, async_calendar_id):
         """See TestAttachmentIntegration.test_get_event_attachments_finds_attachment."""
         event_id, _, _ = await async_client.create_event(
             async_calendar_id,
@@ -1782,7 +1804,9 @@ class TestAsyncAttachmentIntegration:
             await async_client.attach_to_event(
                 event_id, blob_id, "test.bin", "application/octet-stream"
             )
-            assert await async_client.get_event_attachments(event_id) == []
+            attachments = await async_client.get_event_attachments(event_id)
+            assert len(attachments) == 1
+            assert attachments[0].title == "test.bin"
         finally:
             await async_client.delete_event(event_id)
 

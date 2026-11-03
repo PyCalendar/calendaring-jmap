@@ -554,14 +554,19 @@ class _JMAPClientBase:
         new iCalendar, so we report it as droppable, letting the caller
         retry the update without it.
 
-        Returns the set of droppable keys when the failure is exactly this case,
-        or ``None`` when the update succeeded or failed for a genuine reason (in
-        which case the caller proceeds to ``_parse_update_response``,
-        which raises the real error).  Some servers report only one offending
-        property per response, so the caller retries in a loop, dropping the
-        reported keys until the update succeeds or hits a genuine error; each
-        returned key is guaranteed still present in ``patch``, so the loop
-        strictly shrinks the patch and terminates.
+        Returns the set of droppable keys when every offending property not
+        accounted for by this check is one of ``_RECURRENCE_RULE_KEYS`` (left
+        for ``_retry_recurrence_rule_update`` to handle in the same retry
+        pass, since a server can reject both a stale null-cleanup key and
+        the wrong recurrenceRule/recurrenceRules spelling in one response,
+        confirmed live), or ``None`` when the update succeeded or failed for
+        a genuine reason (in which case the caller proceeds to
+        ``_parse_update_response``, which raises the real error). Some
+        servers report only one offending property per response, so the
+        caller retries in a loop, dropping the reported keys until the
+        update succeeds or hits a genuine error; each returned key is
+        guaranteed still present in ``patch``, so the loop strictly shrinks
+        the patch and terminates.
         """
         for method_name, resp_args, _ in responses:
             if method_name == "CalendarEvent/set":
@@ -571,13 +576,141 @@ class _JMAPClientBase:
                     return None
                 props = set(err.get("properties") or [])
                 droppable = {p for p in props if p in nulled and p in patch and patch[p] is None}
-                # Only retry when every offending property is null-cleanup we can
-                # safely omit; if the client actually set one of them to a value,
-                # the rejection is genuine and must surface.
-                if props and props == droppable:
+                unexplained = props - droppable
+                # Only retry when every offending property is either
+                # null-cleanup we can safely omit, or a recurrenceRule/
+                # recurrenceRules spelling mismatch left for the other retry
+                # helper; if the client actually set some other property to
+                # a real value, the rejection is genuine and must surface.
+                if props and unexplained <= _JMAPClientBase._RECURRENCE_RULE_KEYS_SET:
                     return droppable
                 return None
         return None
+
+    _RECURRENCE_RULE_KEYS = ("recurrenceRule", "recurrenceRules")
+    _RECURRENCE_RULE_KEYS_SET = frozenset(_RECURRENCE_RULE_KEYS)
+
+    @staticmethod
+    def _try_recurrence_rule_fallback_key(err: dict | None, jscal: dict, tried: set[str]) -> bool:
+        """Detect a create/update rejected solely for using the wrong
+        ``recurrenceRule``/``recurrenceRules`` spelling, and if so, swap
+        ``jscal`` in place to the other spelling so the caller can retry.
+
+        RFC 8984 section 4.3.3 defines the plural, array-valued
+        ``recurrenceRules``; the singular ``recurrenceRule`` is an older,
+        non-normative spelling some servers still expect instead. Verified
+        live against both test servers this project targets: Cyrus's
+        current image requires the plural array and rejects the singular
+        with ``invalidProperties``, while Stalwart requires the singular
+        and rejects the plural the same way. Since neither server accepts
+        both spellings in the same request (also verified live) and which
+        one a given server wants is not otherwise discoverable, the caller
+        sends whichever spelling ``jscal`` already uses, and on a rejection
+        naming exactly that one property, swaps to the other spelling and
+        retries once.
+
+        ``tried`` starts as an empty set the caller owns across its whole
+        retry loop; the one spelling this function ever swaps to is added
+        to it before returning, so a server that rejects both spellings in
+        turn (never actually observed, but not provable impossible from
+        one response alone) gets exactly one swap, not an alternating
+        retry forever: since there are only two possible spellings, having
+        already swapped once means every spelling has now been sent.
+
+        Returns ``True`` (and mutates ``jscal``) when ``err`` is an
+        ``invalidProperties`` rejection naming exactly one of
+        ``_RECURRENCE_RULE_KEYS`` that is also the key actually present in
+        ``jscal``, and no swap has happened yet this retry loop, or
+        ``False`` (``jscal`` untouched) when the failure is unrelated (a
+        different property, more than one offending property, a spelling
+        already swapped to once this loop, or no error at all) and should
+        surface as-is.
+        """
+        if tried or not err or err.get("type") != "invalidProperties":
+            return False
+        props = set(err.get("properties") or [])
+        if len(props) != 1:
+            return False
+        (offending,) = props
+        if offending not in _JMAPClientBase._RECURRENCE_RULE_KEYS or offending not in jscal:
+            return False
+        fallback = next(k for k in _JMAPClientBase._RECURRENCE_RULE_KEYS if k != offending)
+        value = jscal[offending]
+        # "recurrenceRule" (singular) is one RecurrenceRule object;
+        # "recurrenceRules" (plural, RFC 8984 section 4.3.3) is an array of
+        # them, since an event can in principle have more than one RRULE.
+        # Swapping the key alone would send an object where the other
+        # spelling expects an array, or vice versa, so the value's shape
+        # is converted along with the key: wrap a lone object in a
+        # one-element list going singular to plural. Going plural to
+        # singular, an empty list has nothing to convert (leave jscal
+        # untouched, same as any other unhandled case); otherwise only the
+        # first rule survives if the caller actually supplied more than one
+        # (ical_to_jscal itself never does; a caller building its own
+        # CalendarEvent dict directly could), matching this project's own
+        # established "log and keep first" tradeoff for the same case in
+        # ical_to_jscal's own RRULE handling, since the singular spelling
+        # has no way to carry more than one.
+        if fallback == "recurrenceRules":
+            value = [value]
+        elif isinstance(value, list):
+            if not value:
+                return False
+            if len(value) > 1:
+                log.warning(
+                    "create_event()/update_event(): server rejected the plural "
+                    "recurrenceRules spelling and only the singular is accepted; "
+                    "%d rules were given, only the first is kept.",
+                    len(value),
+                )
+            value = value[0]
+        tried.add(fallback)
+        del jscal[offending]
+        jscal[fallback] = value
+        return True
+
+    @staticmethod
+    def _recurrence_rule_set_error(
+        responses: list,
+    ) -> tuple[dict, dict, list[str], dict, dict, dict] | None:
+        """Find the first ``CalendarEvent/set`` response in ``responses``
+        and return its parsed 6-tuple, or ``None`` if there is none.
+
+        Shared by ``_retry_recurrence_rule_create``/``_retry_recurrence_rule_update``,
+        which otherwise differ only in which element of the tuple holds the
+        error to check (``not_created["new-0"]`` vs. ``not_updated[event_id]``).
+        """
+        for method_name, resp_args, _ in responses:
+            if method_name == "CalendarEvent/set":
+                return parse_event_set(resp_args)
+        return None
+
+    @staticmethod
+    def _retry_recurrence_rule_create(responses: list, jscal: dict, tried: set[str]) -> bool:
+        """``_try_recurrence_rule_fallback_key``, applied to a create
+        response's ``not_created["new-0"]`` error instead of an update's
+        ``not_updated``."""
+        parsed = _JMAPClientBase._recurrence_rule_set_error(responses)
+        if parsed is None:
+            return False
+        _, _, _, not_created, _, _ = parsed
+        return _JMAPClientBase._try_recurrence_rule_fallback_key(
+            not_created.get("new-0"), jscal, tried
+        )
+
+    @staticmethod
+    def _retry_recurrence_rule_update(
+        responses: list, event_id: str, patch: dict, tried: set[str]
+    ) -> bool:
+        """``_try_recurrence_rule_fallback_key``, applied to an update
+        response's ``not_updated[event_id]`` error."""
+        parsed = _JMAPClientBase._recurrence_rule_set_error(responses)
+        if parsed is None:
+            return False
+        _, _, _, _, not_updated, _ = parsed
+        return _JMAPClientBase._try_recurrence_rule_fallback_key(
+            not_updated.get(event_id), patch, tried
+        )
 
     # ---------------------------------------------------------------------------
     # Shared response parsers, pure synchronous, used by both sync and async
@@ -713,7 +846,7 @@ class _JMAPClientBase:
 
     @staticmethod
     def _find_participant_id_by_email(
-        participants: dict, own_email: str, api_url: str, event_id: str
+        participants: dict | None, own_email: str, api_url: str, event_id: str
     ) -> str:
         """Return the id of the entry in ``participants`` whose email is ``own_email``.
 
@@ -722,10 +855,16 @@ class _JMAPClientBase:
         Shared by ``JMAPClient._find_own_participant_id`` and
         ``AsyncJMAPClient._find_own_participant_id``.
 
+        ``participants`` is ``None`` for an event with no ``participants``
+        property at all (RFC 8984 section 4.4.6: optional, omitted rather
+        than an empty map when there are none), treated the same as an
+        empty map: no participant can match, so this still raises rather
+        than crashing on ``None.items()``.
+
         Raises:
             JMAPMethodError: If no participant matches ``own_email``.
         """
-        for participant_id, participant in participants.items():
+        for participant_id, participant in (participants or {}).items():
             if _JMAPClientBase._participant_matches_email(participant, own_email):
                 return participant_id
         raise JMAPMethodError(
@@ -1532,13 +1671,17 @@ class JMAPClient(_JMAPClientBase):
         jscal = self._strip_server_managed_event_properties(event)
         self._resolve_create_calendar_ids(jscal, calendar_id)
         target_account = self._resolve_account(session, account_id)
-        call = build_event_set_create(
-            target_account,
-            {"new-0": jscal},
-            send_scheduling_messages=send_scheduling_messages,
-            if_in_state=if_in_state,
-        )
-        responses = self._request([call])
+        tried_recurrence_rule_keys: set[str] = set()
+        while True:
+            call = build_event_set_create(
+                target_account,
+                {"new-0": jscal},
+                send_scheduling_messages=send_scheduling_messages,
+                if_in_state=if_in_state,
+            )
+            responses = self._request([call])
+            if not self._retry_recurrence_rule_create(responses, jscal, tried_recurrence_rule_keys):
+                break
         event_id = self._parse_create_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set
         )
@@ -1987,15 +2130,21 @@ class JMAPClient(_JMAPClientBase):
         session = self._get_session()
         target_account = self._resolve_account(session, account_id)
         patch, nulled = self._build_event_update_patch(event)
+        tried_recurrence_rule_keys: set[str] = set()
         while True:
             responses = self._request(
                 [build_event_set_update(target_account, {event_id: patch}, if_in_state=if_in_state)]
             )
             drop = self._unsupported_null_keys(responses, event_id, patch, nulled)
-            if not drop:
-                break
-            for key in drop:
-                patch.pop(key, None)
+            if drop:
+                for key in drop:
+                    patch.pop(key, None)
+                continue
+            if self._retry_recurrence_rule_update(
+                responses, event_id, patch, tried_recurrence_rule_keys
+            ):
+                continue
+            break
         self._parse_update_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set, event_id
         )
