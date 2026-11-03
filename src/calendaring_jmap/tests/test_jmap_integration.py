@@ -79,6 +79,26 @@ _cyrus_skip = pytest.mark.skipif(
 )
 
 
+def _xfail_cyrus_in_calendar(request, server) -> None:
+    """Mark the current test ``xfail`` when running against Cyrus.
+
+    Current Cyrus rejects the spec-correct singular ``inCalendar`` query
+    filter this client sends (see issue #91); not a client bug, so not
+    worked around. Any test whose only Cyrus-side failure is this calls
+    this instead of hardcoding an assertion against non-compliant behavior.
+    A class-level ``@_sync_servers`` parametrize mark can't carry a
+    per-param xfail for just one test in a mixed class, so this is applied
+    dynamically from inside the test body instead.
+    """
+    if server == "cyrus":
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="Cyrus rejects the spec-correct singular inCalendar filter, see #91",
+                raises=JMAPMethodError,
+            )
+        )
+
+
 _DEFAULT_ICAL_START = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
 
 
@@ -176,9 +196,9 @@ def _invite_ical(
     partstat: str = "NEEDS-ACTION",
 ) -> str:
     """``role``/``partstat`` default to REQ-PARTICIPANT/NEEDS-ACTION, mapping
-    to ``roles: {"attendee": true}``, confirmed live to be dropped by both
-    Cyrus and Stalwart. Pass ``role="CHAIR"`` for a role that survives on
-    both servers instead."""
+    to ``roles: {"attendee": true}``. Confirmed live that Stalwart drops
+    this role on read-back; current Cyrus keeps it. Pass ``role="CHAIR"``
+    for a role that survives on both servers."""
     extra_lines = (
         f"ORGANIZER:mailto:{organizer_email}\r\n"
         f"ATTENDEE;ROLE={role};PARTSTAT={partstat};RSVP=TRUE:mailto:{attendee_email}\r\n"
@@ -554,6 +574,7 @@ class TestJMAPCalendarManagementIntegration:
 
     def test_add_event_to_shared_calendar_targets_owner_account(
         self,
+        request,
         calendar_management_client,
         second_account_client,
         second_account_id,
@@ -565,6 +586,7 @@ class TestJMAPCalendarManagementIntegration:
         event under the owner's account rather than the sharee's own. This
         is the fix for a gap where a calendar fetched from someone else's
         account silently routed writes back to the caller's own account."""
+        _xfail_cyrus_in_calendar(request, server)
         cal_id = calendar_management_client.create_calendar("Write Shared Integration Calendar")
         try:
             calendar_management_client.share_calendar(
@@ -589,6 +611,7 @@ class TestJMAPCalendarManagementIntegration:
 
     def test_edit_and_delete_event_on_shared_calendar_targets_owner_account(
         self,
+        request,
         calendar_management_client,
         second_account_client,
         second_account_id,
@@ -598,6 +621,7 @@ class TestJMAPCalendarManagementIntegration:
         """save() and delete_event() must route through the calendar's owning
         account too, the same way add_event() does. Both take the object's
         parent._account_id, not the sharee's own session account."""
+        _xfail_cyrus_in_calendar(request, server)
         cal_id = calendar_management_client.create_calendar("Edit Shared Integration Calendar")
         try:
             calendar_management_client.share_calendar(
@@ -902,7 +926,8 @@ class TestJMAPEventIntegration:
         with pytest.raises(JMAPMethodError):
             event_client.get_event(event_id)
 
-    def test_event_query_time_range(self, event_client, event_calendar_id):
+    def test_event_query_time_range(self, request, event_client, event_calendar_id, server):
+        _xfail_cyrus_in_calendar(request, server)
         title = "Query Range Test Event"
         event_id, _, _ = event_client.create_event(
             event_calendar_id, _minimal_event(title, calendar_id=event_calendar_id)
@@ -1606,6 +1631,10 @@ class TestAsyncJMAPEventIntegration:
             await async_client.get_event(event_id)
 
     @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason="Cyrus rejects the spec-correct singular inCalendar filter, see #91",
+        raises=JMAPMethodError,
+    )
     async def test_event_query_time_range(
         self, async_client, async_calendar_id, async_created_event_id
     ):
@@ -2091,8 +2120,15 @@ class TestRicherEventSearchIntegration:
     """
 
     def test_has_attachment_true_finds_event_with_attachment(
-        self, event_client, event_calendar_id, server
+        self, request, event_client, event_calendar_id, server
     ):
+        # Cyrus used to drop rel: "enclosure" on read-back, so this event
+        # would never match has_attachment=True there; confirmed live that
+        # the current pinned Cyrus image no longer has that bug, so both
+        # servers are expected to match now. Still xfails on Cyrus because
+        # search_events itself fails first on the inCalendar regression
+        # (#91), before has_attachment ever gets evaluated client-side.
+        _xfail_cyrus_in_calendar(request, server)
         event_id, _, _ = event_client.create_event(
             event_calendar_id, ical_to_jscal(_attachment_ical(), calendar_id=event_calendar_id)
         )
@@ -2101,16 +2137,7 @@ class TestRicherEventSearchIntegration:
                 calendar_id=event_calendar_id, has_attachment=True
             ).events
             matched = any(r.id == event_id for r in results)
-            if server == "cyrus":
-                # Cyrus drops rel: "enclosure" on read-back, seen against a
-                # running instance, so has_attachment=True cannot find this event there.
-                assert not matched, (
-                    f"{server}: expected has_attachment=True to miss this event "
-                    "(known rel: enclosure drop); it matched instead, meaning "
-                    "the Cyrus bug this test documents may have been fixed."
-                )
-            else:
-                assert matched, f"{server}: has_attachment=True did not find the event."
+            assert matched, f"{server}: has_attachment=True did not find the event."
         finally:
             event_client.delete_event(event_id)
 
@@ -2131,12 +2158,13 @@ class TestRicherEventSearchIntegration:
             event_client.delete_event(event_id)
 
     def test_chair_participant_matches_email_status_and_role_filters(
-        self, event_client, event_calendar_id, owner_email, server
+        self, request, event_client, event_calendar_id, owner_email, server
     ):
         """One CHAIR/ACCEPTED participant, so a single seeded event
         exercises participant_email, participation_status, and
         participant_role together instead of three near-identical
         create/search/delete sequences."""
+        _xfail_cyrus_in_calendar(request, server)
         chair_email = "chair-filter-test@example.com"
         event_id, _, _ = event_client.create_event(
             event_calendar_id,
@@ -2168,12 +2196,14 @@ class TestRicherEventSearchIntegration:
             event_client.delete_event(event_id)
 
     def test_participant_role_attendee_confirmed_dropped(
-        self, event_client, event_calendar_id, owner_email, server
+        self, request, event_client, event_calendar_id, owner_email, server
     ):
-        """Locks in the confirmed-live finding that both Cyrus and Stalwart
-        drop the "attendee" role from a participant's roles map: this
-        assertion should start failing, not silently pass, the day either
-        server stops doing that."""
+        """Locks in the confirmed-live finding that Stalwart drops the
+        "attendee" role from a participant's roles map: this assertion
+        should start failing, not silently pass, the day it stops doing
+        that. Current Cyrus keeps the role and matches correctly, confirmed
+        live, so this is Stalwart-specific, not a shared server quirk."""
+        _xfail_cyrus_in_calendar(request, server)
         attendee_email = "attendee-role-gap-test@example.com"
         event_id, _, _ = event_client.create_event(
             event_calendar_id,
@@ -2183,16 +2213,20 @@ class TestRicherEventSearchIntegration:
             results = event_client.search_events(
                 calendar_id=event_calendar_id, participant_role="attendee"
             ).events
-            assert not any(r.id == event_id for r in results), (
-                f"{server}: participant_role='attendee' matched the seeded "
-                "participant; the confirmed-live role-drop bug this test "
-                "documents may have been fixed server-side."
-            )
+            matched = any(r.id == event_id for r in results)
+            if server == "stalwart":
+                assert not matched, (
+                    f"{server}: participant_role='attendee' matched the seeded "
+                    "participant; the confirmed-live role-drop bug this test "
+                    "documents may have been fixed server-side."
+                )
+            else:
+                assert matched, f"{server}: participant_role='attendee' did not find the event."
         finally:
             event_client.delete_event(event_id)
 
     def test_search_events_limit_caps_page_and_total_reflects_full_count(
-        self, event_client, event_calendar_id, server
+        self, request, event_client, event_calendar_id, server
     ):
         """Confirmed live this session: Cyrus includes total unconditionally
         in CalendarEvent/query responses, even when calculateTotal was never
@@ -2201,6 +2235,7 @@ class TestRicherEventSearchIntegration:
         against a real server's response unless calculate_total=True was
         actually passed, not merely whether the server happened to include
         one."""
+        _xfail_cyrus_in_calendar(request, server)
         event_ids = [
             event_client.create_event(
                 event_calendar_id,
