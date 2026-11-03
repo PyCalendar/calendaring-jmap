@@ -2044,6 +2044,36 @@ class TestJMAPClientBaseParsers:
         assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried) is False
         assert jscal == {"recurrenceRules": [{"frequency": "daily"}]}
 
+    def test_parse_event_query_response_returns_default_without_match(self):
+        assert _JMAPClientBase._parse_event_query_response([_UNRELATED_RESPONSE]) == (0, None)
+
+    def test_parse_set_state_returns_empty_strings_without_match(self):
+        assert _JMAPClientBase._parse_set_state([_UNRELATED_RESPONSE], "CalendarEvent/set") == (
+            "",
+            "",
+        )
+
+    def test_recurrence_rule_set_error_returns_none_without_match(self):
+        assert _JMAPClientBase._recurrence_rule_set_error([_UNRELATED_RESPONSE]) is None
+
+    def test_retry_recurrence_rule_create_returns_false_without_match(self):
+        jscal = {"recurrenceRule": {"frequency": "daily"}}
+        assert (
+            _JMAPClientBase._retry_recurrence_rule_create([_UNRELATED_RESPONSE], jscal, set())
+            is False
+        )
+        assert jscal == {"recurrenceRule": {"frequency": "daily"}}
+
+    def test_retry_recurrence_rule_update_returns_false_without_match(self):
+        patch = {"recurrenceRule": {"frequency": "daily"}}
+        assert (
+            _JMAPClientBase._retry_recurrence_rule_update(
+                [_UNRELATED_RESPONSE], "ev1", patch, set()
+            )
+            is False
+        )
+        assert patch == {"recurrenceRule": {"frequency": "daily"}}
+
     def test_parse_get_calendars_skips_unrelated_responses_in_batch(self):
         assert (
             _JMAPClientBase._parse_get_calendars([_UNRELATED_RESPONSE], client=None, is_async=False)
@@ -7550,6 +7580,13 @@ class TestJMAPClientCalendars(_MockedClientMixin):
         client.update_calendar("cal1", color="#ff0000")
         update_args = captured["json"]["methodCalls"][0][1]
         assert update_args["update"]["cal1"] == {"color": "#ff0000"}
+
+    def test_update_calendar_patches_timezone(self, monkeypatch):
+        resp = self._set_response(updated={"cal1": None})
+        client, captured = self._capturing_client(monkeypatch, resp)
+        client.update_calendar("cal1", timezone="America/New_York")
+        update_args = captured["json"]["methodCalls"][0][1]
+        assert update_args["update"]["cal1"] == {"timeZone": "America/New_York"}
 
     def test_delete_calendar_success(self, monkeypatch):
         resp = self._set_response(destroyed=["cal1"])
