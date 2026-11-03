@@ -49,6 +49,17 @@ Pushing the tag triggers the ``release`` GitHub Actions workflow: it runs the fu
 
 Read the Docs builds the new version automatically from the same tag push; no separate step is needed there.
 
+Dependency maintenance
+======================
+
+Whenever adding or dropping a supported Python version, check which dependencies have newer compatible versions with ``uv tree``:
+
+.. code-block:: bash
+
+    uv tree --all-groups --depth=2 --python-version 3.11
+
+Run this once per supported Python version (see ``requires-python`` in ``pyproject.toml`` and the ``python-version`` matrix in ``.github/workflows/tests.yml`` for the current range). ``--depth=2`` shows each direct dependency and its own first-level dependencies, enough to spot an outdated pin without the full transitive tree. Pay particular attention to ``icalendar``: this project's own public API tracks it, so a new ``icalendar`` release is worth checking against the :doc:`changelog`.
+
 Maintainer access
 =================
 
