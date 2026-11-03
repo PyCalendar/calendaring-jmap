@@ -80,7 +80,7 @@ html_theme_options = {
         },
     ],
     "article_footer_items": ["last-updated"],
-    "footer_start": ["nlnet", "donate"],
+    "footer_start": ["nlnet"],
     "footer_center": "copyright",
     "footer_end": ["rtd-pr-previews", "theme-version", "sphinx-version"],
     "logo": {"text": "calendaring-jmap"},
