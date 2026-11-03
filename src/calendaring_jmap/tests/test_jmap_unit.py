@@ -1479,6 +1479,26 @@ class TestContactMethodBuilders:
     def test_parse_address_book_get_missing_list_key(self):
         assert parse_address_book_get({}) == []
 
+    def test_parse_address_book_get_infers_default_for_sole_address_book(self):
+        # RFC 9610 section 2 requires isDefault to be true for exactly one
+        # AddressBook; confirmed live that Cyrus omits the key entirely
+        # rather than sending it false, so the account's only address book
+        # must still end up marked default even though the server never said so.
+        response_args = {"list": [_ADDRESS_BOOK_JSON_MINIMAL]}
+        books = parse_address_book_get(response_args)
+        assert len(books) == 1
+        assert books[0].is_default is True
+
+    def test_parse_address_book_get_does_not_override_explicit_default(self):
+        response_args = {"list": [dict(_ADDRESS_BOOK_JSON_MINIMAL, isDefault=True)]}
+        books = parse_address_book_get(response_args)
+        assert books[0].is_default is True
+
+    def test_parse_address_book_get_does_not_infer_default_with_multiple_books(self):
+        response_args = {"list": [_ADDRESS_BOOK_JSON_FULL, _ADDRESS_BOOK_JSON_MINIMAL]}
+        books = parse_address_book_get(response_args)
+        assert books[1].is_default is False
+
     def test_build_contact_query_structure(self):
         method, args, call_id = build_contact_query("u1")
         assert method == "ContactCard/query"
@@ -1839,6 +1859,33 @@ class TestJMAPClientBaseParsers:
         result = _JMAPClientBase._parse_event_changes_response([])
         assert result == ([], [], [], "", "", False)
 
+    def test_find_participant_id_by_email_raises_not_found_for_none_participants(self):
+        # An event with no "participants" property at all (RFC 8984 section
+        # 4.4.6: optional) can come back with the key present and explicitly
+        # null, not merely absent, so a plain dict.get(key, {}) default does
+        # not help; this must still raise notFound, not crash on None.items().
+        with pytest.raises(JMAPMethodError) as exc_info:
+            _JMAPClientBase._find_participant_id_by_email(
+                None, "nobody@example.invalid", _API_URL, "ev1"
+            )
+        assert exc_info.value.error_type == "notFound"
+
+    def test_find_participant_id_by_email_raises_not_found_for_empty_participants(self):
+        with pytest.raises(JMAPMethodError) as exc_info:
+            _JMAPClientBase._find_participant_id_by_email(
+                {}, "nobody@example.invalid", _API_URL, "ev1"
+            )
+        assert exc_info.value.error_type == "notFound"
+
+    def test_find_participant_id_by_email_finds_matching_participant(self):
+        participants = {"p1": {"email": "alice@example.com"}}
+        assert (
+            _JMAPClientBase._find_participant_id_by_email(
+                participants, "alice@example.com", _API_URL, "ev1"
+            )
+            == "p1"
+        )
+
     def test_unsupported_null_keys_returns_none_without_match(self):
         assert (
             _JMAPClientBase._unsupported_null_keys(
@@ -1862,6 +1909,140 @@ class TestJMAPClientBaseParsers:
             )
             is None
         )
+
+    def test_unsupported_null_keys_drops_null_cleanup_alongside_recurrence_rule_mismatch(self):
+        # A server can reject both a stale null-cleanup key and the wrong
+        # recurrenceRule/recurrenceRules spelling in the same response
+        # (confirmed live against Cyrus's current image): the null-cleanup
+        # key is still droppable even though the whole response isn't a
+        # pure null-cleanup case, leaving the recurrenceRule mismatch for
+        # _retry_recurrence_rule_update to handle on the next retry.
+        matching = (
+            "CalendarEvent/set",
+            {
+                "notUpdated": {
+                    "ev1": {
+                        "type": "invalidProperties",
+                        "properties": ["recurrenceRule", "excludedRecurrenceRule"],
+                    }
+                }
+            },
+            "c1",
+        )
+        drop = _JMAPClientBase._unsupported_null_keys(
+            [matching],
+            "ev1",
+            patch={"recurrenceRule": {"frequency": "daily"}, "excludedRecurrenceRule": None},
+            nulled=frozenset({"excludedRecurrenceRule"}),
+        )
+        assert drop == {"excludedRecurrenceRule"}
+
+    def test_unsupported_null_keys_returns_none_for_unexplained_property_mixed_in(self):
+        # A genuine offending property that is neither null-cleanup nor a
+        # recurrenceRule/recurrenceRules spelling mismatch must still
+        # surface as a real error, even alongside one that is.
+        matching = (
+            "CalendarEvent/set",
+            {
+                "notUpdated": {
+                    "ev1": {
+                        "type": "invalidProperties",
+                        "properties": ["recurrenceRule", "title"],
+                    }
+                }
+            },
+            "c1",
+        )
+        drop = _JMAPClientBase._unsupported_null_keys(
+            [matching],
+            "ev1",
+            patch={"recurrenceRule": {"frequency": "daily"}, "title": "x"},
+            nulled=frozenset(),
+        )
+        assert drop is None
+
+    def test_recurrence_rule_fallback_key_returns_false_without_error(self):
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(None, {}, tried=set()) is False
+
+    def test_recurrence_rule_fallback_key_returns_false_for_unrelated_error_type(self):
+        err = {"type": "stateMismatch"}
+        jscal = {"recurrenceRule": {}}
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried=set()) is False
+        assert jscal == {"recurrenceRule": {}}
+
+    def test_recurrence_rule_fallback_key_returns_false_for_multiple_offending_properties(self):
+        err = {"type": "invalidProperties", "properties": ["recurrenceRule", "title"]}
+        jscal = {"recurrenceRule": {}, "title": "x"}
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried=set()) is False
+        assert jscal == {"recurrenceRule": {}, "title": "x"}
+
+    def test_recurrence_rule_fallback_key_returns_false_for_unrelated_property(self):
+        err = {"type": "invalidProperties", "properties": ["title"]}
+        jscal = {"recurrenceRule": {}, "title": "x"}
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried=set()) is False
+        assert jscal == {"recurrenceRule": {}, "title": "x"}
+
+    def test_recurrence_rule_fallback_key_returns_false_when_key_not_in_jscal(self):
+        err = {"type": "invalidProperties", "properties": ["recurrenceRules"]}
+        jscal = {"recurrenceRule": {}}
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried=set()) is False
+        assert jscal == {"recurrenceRule": {}}
+
+    def test_recurrence_rule_fallback_key_swaps_singular_to_plural_wrapping_in_list(self):
+        # "recurrenceRule" (singular) is one RecurrenceRule object;
+        # "recurrenceRules" (plural) is RecurrenceRule[] (RFC 8984 section
+        # 4.3.3). The swap must wrap the object in a one-element list, not
+        # just rename the key and send an object where an array belongs.
+        err = {"type": "invalidProperties", "properties": ["recurrenceRule"]}
+        jscal = {"recurrenceRule": {"frequency": "daily"}}
+        tried: set[str] = set()
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried) is True
+        assert jscal == {"recurrenceRules": [{"frequency": "daily"}]}
+        assert tried == {"recurrenceRules"}
+
+    def test_recurrence_rule_fallback_key_swaps_plural_to_singular_unwrapping_list(self):
+        err = {"type": "invalidProperties", "properties": ["recurrenceRules"]}
+        jscal = {"recurrenceRules": [{"frequency": "daily"}]}
+        tried: set[str] = set()
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried) is True
+        assert jscal == {"recurrenceRule": {"frequency": "daily"}}
+        assert tried == {"recurrenceRule"}
+
+    def test_recurrence_rule_fallback_key_keeps_first_rule_when_unwrapping_multiple(self, caplog):
+        # ical_to_jscal itself never emits more than one rule, but a caller
+        # building its own CalendarEvent dict directly could; unwrapping to
+        # the singular spelling can only carry one, so the first is kept
+        # and the rest logged rather than silently dropped with no trace.
+        err = {"type": "invalidProperties", "properties": ["recurrenceRules"]}
+        jscal = {"recurrenceRules": [{"frequency": "daily"}, {"frequency": "weekly"}]}
+        tried: set[str] = set()
+        with caplog.at_level("WARNING", logger="calendaring_jmap"):
+            assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried) is True
+        assert jscal == {"recurrenceRule": {"frequency": "daily"}}
+        assert "only the first is kept" in caplog.text
+
+    def test_recurrence_rule_fallback_key_returns_false_for_empty_list(self):
+        # An empty recurrenceRules array has nothing to unwrap to a single
+        # RecurrenceRule object; must leave jscal untouched rather than
+        # crashing on an out-of-range index.
+        err = {"type": "invalidProperties", "properties": ["recurrenceRules"]}
+        jscal = {"recurrenceRules": []}
+        tried: set[str] = set()
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried) is False
+        assert jscal == {"recurrenceRules": []}
+        assert tried == set()
+
+    def test_recurrence_rule_fallback_key_does_not_retry_once_a_swap_already_happened(self):
+        """A server that somehow rejects both spellings in turn (never
+        observed live, but not provable impossible from a single response)
+        gets exactly one swap total, not an alternating retry forever:
+        since there are only two possible spellings, a non-empty ``tried``
+        means every spelling has already been sent once."""
+        err = {"type": "invalidProperties", "properties": ["recurrenceRules"]}
+        jscal = {"recurrenceRules": [{"frequency": "daily"}]}
+        tried = {"recurrenceRules"}
+        assert _JMAPClientBase._try_recurrence_rule_fallback_key(err, jscal, tried) is False
+        assert jscal == {"recurrenceRules": [{"frequency": "daily"}]}
 
     def test_parse_get_calendars_skips_unrelated_responses_in_batch(self):
         assert (
@@ -2731,16 +2912,15 @@ class TestIcalToJscal:
         assert result["timeZone"] == "Etc/UTC"
         assert result["duration"] == "PT1H"
 
-    def test_version_is_2_0(self):
-        """RFC 8984 has no version property; jscalendarbis adds it and
-        registers "1.0" for RFC 8984-conformant data, "2.0" for its own.
-        This converter's output is actually RFC 8984-shaped ("1.0" would be
-        strictly accurate), but it sends "2.0" since the test servers this
-        project runs against require it. See ical_to_jscal's inline comment
-        for the full reasoning."""
+    def test_version_is_not_set(self):
+        """RFC 8984 has no version property; jscalendarbis adds it,
+        optional, for its own 2.0-only properties this converter doesn't
+        emit. Left unset rather than claiming either version. See
+        ical_to_jscal's inline comment for the full reasoning, including
+        why a hardcoded "2.0" broke against a real server."""
         ical = _make_ical("DTSTART:20240615T100000Z\r\nDURATION:PT1H\r\nSUMMARY:Test Event\r\n")
         result = ical_to_jscal(ical)
-        assert result["version"] == "2.0"
+        assert "version" not in result
 
     def test_all_day_event(self):
         ical = _make_ical(
@@ -3126,10 +3306,10 @@ class TestIcalToJscal:
         attendee = next(iter(result["participants"].values()))
         assert attendee["participationStatus"] == "declined"
 
-    def test_organizer_attendee_use_calendar_address_not_send_to(self):
-        # Cyrus rejects CalendarEvent/set outright if any Participant has a
-        # sendTo property, and separately requires calendarAddress, which
-        # RFC 8984 does not define here at all. Verified live against Cyrus.
+    def test_organizer_attendee_set_both_calendar_address_and_send_to(self):
+        # Cyrus's current image requires every participant to carry sendTo,
+        # rejecting its absence with invalidProperties; Stalwart accepts it
+        # present or absent either way. Verified live against both.
         ical = _make_ical(
             "DTSTART:20240615T100000Z\r\n"
             "SUMMARY:Meeting\r\n"
@@ -3138,13 +3318,15 @@ class TestIcalToJscal:
         )
         result = ical_to_jscal(ical)
         for participant in result["participants"].values():
-            assert "sendTo" not in participant
             assert participant["calendarAddress"] == f"mailto:{participant['email']}"
+            assert participant["sendTo"] == {"imip": f"mailto:{participant['email']}"}
 
     def test_non_mailto_attendee_keeps_calendar_address_without_fake_email(self):
         # CAL-ADDRESS is a URI (RFC 5545 3.3.3), not required to use
         # mailto:. RFC 8984's Participant.email is an RFC 5322 addr-spec,
-        # so a non-mailto URI must not be written there.
+        # so a non-mailto URI must not be written there. sendTo's "imip"
+        # method specifically requires a mailto: URI (RFC 8984 section
+        # 4.4.6), so a non-mailto address goes under "other" instead.
         ical = _make_ical(
             "DTSTART:20240615T100000Z\r\nSUMMARY:Meeting\r\nATTENDEE:sip:alice@example.com\r\n"
         )
@@ -3152,6 +3334,7 @@ class TestIcalToJscal:
         attendee = next(iter(result["participants"].values()))
         assert attendee["calendarAddress"] == "sip:alice@example.com"
         assert "email" not in attendee
+        assert attendee["sendTo"] == {"other": "sip:alice@example.com"}
 
     def test_bare_attendee_address_without_scheme_is_treated_as_email(self):
         # CAL-ADDRESS is technically required to be a URI, but some
@@ -5829,8 +6012,9 @@ class TestJMAPClientEvents(_MockedClientMixin):
     def _sequence_client(self, responses):
         """Return (client, captured) replaying ``responses`` POST-by-POST.
 
-        ``captured["patches"]`` collects the ``update`` patch dict sent on each
-        CalendarEvent/set POST, in order.
+        ``captured["patches"]`` collects the ``update`` patch dict (keyed
+        ``"ev1"``) or ``create`` dict (keyed ``"new-0"``) sent on each
+        CalendarEvent/set POST, in order, whichever the call under test uses.
         """
         captured: dict = {"patches": []}
         client = JMAPClient(url=_JMAP_URL, username=_USERNAME, password=_PASSWORD)
@@ -5839,9 +6023,12 @@ class TestJMAPClientEvents(_MockedClientMixin):
 
         def post(*args, **kwargs):
             body = kwargs.get("json", {})
-            update = body["methodCalls"][0][1].get("update")
-            if update:
-                captured["patches"].append(dict(update["ev1"]))  # copy: caller mutates in place
+            args_dict = body["methodCalls"][0][1]
+            jscal = (args_dict.get("update") or {}).get("ev1") or (
+                args_dict.get("create") or {}
+            ).get("new-0")
+            if jscal is not None:
+                captured["patches"].append(dict(jscal))  # copy: caller mutates in place
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = next(seq)
@@ -5882,6 +6069,72 @@ class TestJMAPClientEvents(_MockedClientMixin):
         assert captured["patches"][0]["recurrenceRule"] is None
         assert "recurrenceRule" not in captured["patches"][2]
         assert "excludedRecurrenceRule" not in captured["patches"][2]
+
+    def test_update_event_retries_swapping_recurrence_rule_spelling(self, monkeypatch):
+        # A server (e.g. Cyrus's current image) rejects whichever
+        # recurrenceRule/recurrenceRules spelling the client sent;
+        # update_event must swap to the other spelling and retry once.
+        reject_singular = self._set_response(
+            notUpdated={"ev1": {"type": "invalidProperties", "properties": ["recurrenceRule"]}}
+        )
+        responses = [reject_singular, self._set_response(updated={"ev1": None})]
+        client, captured = self._sequence_client(responses)
+        event = dict(self._MINIMAL_EVENT, recurrenceRule={"frequency": "daily"})
+
+        client.update_event("ev1", event)
+
+        assert len(captured["patches"]) == 2
+        assert captured["patches"][0]["recurrenceRule"] == {"frequency": "daily"}
+        assert captured["patches"][1]["recurrenceRules"] == [{"frequency": "daily"}]
+        assert "recurrenceRule" not in captured["patches"][1]
+
+    def test_update_event_drops_null_key_and_swaps_recurrence_rule_in_one_response(
+        self, monkeypatch
+    ):
+        # A server can reject a stale null-cleanup key (excludedRecurrenceRule,
+        # absent from the new iCalendar) alongside the wrong recurrenceRule
+        # spelling in the very same response (confirmed live against Cyrus's
+        # current image); update_event must drop the former and swap the
+        # latter, not treat the mix as one unrecoverable genuine failure.
+        reject_both = self._set_response(
+            notUpdated={
+                "ev1": {
+                    "type": "invalidProperties",
+                    "properties": ["recurrenceRule", "excludedRecurrenceRule"],
+                }
+            }
+        )
+        reject_singular_only = self._set_response(
+            notUpdated={"ev1": {"type": "invalidProperties", "properties": ["recurrenceRule"]}}
+        )
+        responses = [reject_both, reject_singular_only, self._set_response(updated={"ev1": None})]
+        client, captured = self._sequence_client(responses)
+        event = dict(self._MINIMAL_EVENT, recurrenceRule={"frequency": "daily"})
+
+        client.update_event("ev1", event)
+
+        assert len(captured["patches"]) == 3
+        assert captured["patches"][0]["recurrenceRule"] == {"frequency": "daily"}
+        assert captured["patches"][0]["excludedRecurrenceRule"] is None
+        assert "excludedRecurrenceRule" not in captured["patches"][1]
+        assert captured["patches"][1]["recurrenceRule"] == {"frequency": "daily"}
+        assert captured["patches"][2]["recurrenceRules"] == [{"frequency": "daily"}]
+
+    def test_create_event_retries_swapping_recurrence_rule_spelling(self, monkeypatch):
+        reject_plural = self._set_response(
+            notCreated={"new-0": {"type": "invalidProperties", "properties": ["recurrenceRules"]}}
+        )
+        responses = [reject_plural, self._set_response(created={"new-0": {"id": "sv-1"}})]
+        client, captured = self._sequence_client(responses)
+        event = dict(self._MINIMAL_EVENT, recurrenceRules=[{"frequency": "daily"}])
+
+        event_id, _, _ = client.create_event("cal1", event)
+
+        assert event_id == "sv-1"
+        assert len(captured["patches"]) == 2
+        assert captured["patches"][0]["recurrenceRules"] == [{"frequency": "daily"}]
+        assert captured["patches"][1]["recurrenceRule"] == {"frequency": "daily"}
+        assert "recurrenceRules" not in captured["patches"][1]
 
     def test_update_event_does_not_drop_explicitly_set_property(self, monkeypatch):
         # If the rejected property was actually assigned a value by the client
@@ -6075,6 +6328,18 @@ class TestJMAPClientEvents(_MockedClientMixin):
         client = _make_client_with_mocked_session(monkeypatch, resp)
         with pytest.raises(JMAPMethodError) as exc_info:
             client._find_own_participant_id("ev1", "stranger@example.com")
+        assert exc_info.value.error_type == "notFound"
+
+    def test_find_own_participant_id_raises_not_found_for_event_with_no_participants(
+        self, monkeypatch
+    ):
+        # An event with no participants at all comes back with the key
+        # present and explicitly null, not merely absent (RFC 8984 section
+        # 4.4.6: optional); must still raise notFound, not crash.
+        resp = self._get_response([dict(self._RAW_EVENT, participants=None)])
+        client = _make_client_with_mocked_session(monkeypatch, resp)
+        with pytest.raises(JMAPMethodError) as exc_info:
+            client._find_own_participant_id("ev1", "nobody@example.invalid")
         assert exc_info.value.error_type == "notFound"
 
     def test_find_own_participant_id_falls_back_to_calendar_address(self, monkeypatch):
@@ -8674,6 +8939,18 @@ class TestAsyncJMAPClient:
         assert exc_info.value.error_type == "notFound"
 
     @pytest.mark.asyncio
+    async def test_find_own_participant_id_raises_not_found_for_event_with_no_participants(
+        self, monkeypatch
+    ):
+        resp = self._event_get_resp([dict(self._RAW_EVENT, participants=None)])
+        self._patch_async_session(monkeypatch, resp)
+        with pytest.raises(JMAPMethodError) as exc_info:
+            await self._make_client()._find_own_participant_id(
+                "ev-async-1", "nobody@example.invalid"
+            )
+        assert exc_info.value.error_type == "notFound"
+
+    @pytest.mark.asyncio
     async def test_find_own_participant_id_falls_back_to_calendar_address(self, monkeypatch):
         resp = self._event_get_resp(
             [
@@ -10447,6 +10724,115 @@ class TestAsyncJMAPClient:
         assert len(patches_seen) == 2
         assert patches_seen[0]["recurrenceRule"] is None
         assert "recurrenceRule" not in patches_seen[1]
+
+    @pytest.mark.asyncio
+    async def test_update_event_retries_swapping_recurrence_rule_spelling(self, monkeypatch):
+        responses = [
+            self._event_set_resp(
+                notUpdated={
+                    "ev-async-1": {"type": "invalidProperties", "properties": ["recurrenceRule"]}
+                }
+            ),
+            self._event_set_resp(updated={"ev-async-1": None}),
+        ]
+        mock_http = MagicMock()
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        patches_seen = []
+
+        async def post(*args, **kwargs):
+            body = kwargs.get("json", {})
+            update = body["methodCalls"][0][1].get("update")
+            patches_seen.append(dict(update["ev-async-1"]))
+            return self._make_mock_response(responses.pop(0))
+
+        mock_http.post = post
+        monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
+        event = dict(self._MINIMAL_EVENT, recurrenceRule={"frequency": "daily"})
+        await self._make_client().update_event("ev-async-1", event)
+
+        assert len(patches_seen) == 2
+        assert patches_seen[0]["recurrenceRule"] == {"frequency": "daily"}
+        assert patches_seen[1]["recurrenceRules"] == [{"frequency": "daily"}]
+        assert "recurrenceRule" not in patches_seen[1]
+
+    @pytest.mark.asyncio
+    async def test_update_event_drops_null_key_and_swaps_recurrence_rule_in_one_response(
+        self, monkeypatch
+    ):
+        # See the sync version of this test in TestJMAPClientEvents for why:
+        # a server can reject a stale null-cleanup key alongside the wrong
+        # recurrenceRule spelling in the same response.
+        responses = [
+            self._event_set_resp(
+                notUpdated={
+                    "ev-async-1": {
+                        "type": "invalidProperties",
+                        "properties": ["recurrenceRule", "excludedRecurrenceRule"],
+                    }
+                }
+            ),
+            self._event_set_resp(
+                notUpdated={
+                    "ev-async-1": {"type": "invalidProperties", "properties": ["recurrenceRule"]}
+                }
+            ),
+            self._event_set_resp(updated={"ev-async-1": None}),
+        ]
+        mock_http = MagicMock()
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        patches_seen = []
+
+        async def post(*args, **kwargs):
+            body = kwargs.get("json", {})
+            update = body["methodCalls"][0][1].get("update")
+            patches_seen.append(dict(update["ev-async-1"]))
+            return self._make_mock_response(responses.pop(0))
+
+        mock_http.post = post
+        monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
+        event = dict(self._MINIMAL_EVENT, recurrenceRule={"frequency": "daily"})
+        await self._make_client().update_event("ev-async-1", event)
+
+        assert len(patches_seen) == 3
+        assert patches_seen[0]["recurrenceRule"] == {"frequency": "daily"}
+        assert patches_seen[0]["excludedRecurrenceRule"] is None
+        assert "excludedRecurrenceRule" not in patches_seen[1]
+        assert patches_seen[1]["recurrenceRule"] == {"frequency": "daily"}
+        assert patches_seen[2]["recurrenceRules"] == [{"frequency": "daily"}]
+
+    @pytest.mark.asyncio
+    async def test_create_event_retries_swapping_recurrence_rule_spelling(self, monkeypatch):
+        responses = [
+            self._event_set_resp(
+                notCreated={
+                    "new-0": {"type": "invalidProperties", "properties": ["recurrenceRules"]}
+                }
+            ),
+            self._event_set_resp(created={"new-0": {"id": "sv-async-1"}}),
+        ]
+        mock_http = MagicMock()
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        patches_seen = []
+
+        async def post(*args, **kwargs):
+            body = kwargs.get("json", {})
+            create = body["methodCalls"][0][1].get("create")
+            patches_seen.append(dict(create["new-0"]))
+            return self._make_mock_response(responses.pop(0))
+
+        mock_http.post = post
+        monkeypatch.setattr("calendaring_jmap.async_client.AsyncSession", lambda: mock_http)
+        event = dict(self._MINIMAL_EVENT, recurrenceRules=[{"frequency": "daily"}])
+        event_id, _, _ = await self._make_client().create_event("cal1", event)
+
+        assert event_id == "sv-async-1"
+        assert len(patches_seen) == 2
+        assert patches_seen[0]["recurrenceRules"] == [{"frequency": "daily"}]
+        assert patches_seen[1]["recurrenceRule"] == {"frequency": "daily"}
+        assert "recurrenceRules" not in patches_seen[1]
 
 
 class TestOverrideWithoutStartUsesOccurrenceTime:

@@ -275,6 +275,17 @@ def _cal_address_to_imip_and_email(addr: str) -> tuple[str, str | None]:
     return f"mailto:{addr}", addr
 
 
+def _send_to(imip: str) -> dict:
+    """Build a Participant ``sendTo`` map for ``imip`` (the URI returned by
+    ``_cal_address_to_imip_and_email``, despite that function's own name
+    not always being one: RFC 8984 section 4.4.6 requires the ``"imip"``
+    key's value specifically to be a ``mailto:`` URI, so a non-mailto
+    scheme such as ``sip:`` goes under ``"other"`` instead, whose method is
+    left undefined by the spec on purpose.
+    """
+    return {"imip": imip} if imip.startswith("mailto:") else {"other": imip}
+
+
 def _organizer_to_participant(organizer) -> tuple[str, dict]:
     """Convert an ORGANIZER property to a (participant_id, Participant dict) tuple."""
     imip, email = _cal_address_to_imip_and_email(str(organizer))
@@ -284,17 +295,16 @@ def _organizer_to_participant(organizer) -> tuple[str, dict]:
         # RFC 8984's own Participant object has no calendarAddress property;
         # it belongs to JMAP Calendars' ParticipantIdentity/Principal objects
         # instead, and sendTo (a map of delivery method to URI) is what
-        # RFC 8984 actually defines for this. Cyrus's CalendarEvent/set
-        # rejects sendTo outright with invalidProperties on both create and
-        # update, and separately requires calendarAddress, which RFC 8984
-        # does not define here at all. Verified live against a running Cyrus
-        # container: sendTo alone rejected, calendarAddress alone accepted,
-        # both present still rejected for sendTo. calendarAddress is set to
-        # sendTo's would-be "imip" value, its natural equivalent per
-        # ParticipantIdentity's own definition. sendTo itself is optional in
-        # RFC 8984, so omitting it is a real compatibility tradeoff, not a
-        # spec violation; Stalwart accepts calendarAddress-only fine too.
+        # RFC 8984 actually defines for this. calendarAddress is additionally
+        # set to sendTo's "imip" value, its natural equivalent per
+        # ParticipantIdentity's own definition; Cyrus requires it and
+        # Stalwart accepts it, confirmed live on both. sendTo itself is
+        # optional per RFC 8984, but Cyrus's current image requires it on
+        # every participant unconditionally (create and update alike,
+        # scheduling or not), rejecting its absence with invalidProperties;
+        # Stalwart accepts it present or absent either way, confirmed live.
         "calendarAddress": imip,
+        "sendTo": _send_to(imip),
     }
     cn = organizer.params.get("CN")
     if cn:
@@ -310,9 +320,10 @@ def _attendee_to_participant(attendee) -> tuple[str, dict]:
     pid = str(uuid.uuid4())
     p: dict = {
         "roles": {"attendee": True},
-        # See _organizer_to_participant for why calendarAddress is set
-        # instead of sendTo.
+        # See _organizer_to_participant for why calendarAddress and sendTo
+        # are both set.
         "calendarAddress": imip,
+        "sendTo": _send_to(imip),
     }
     if email is not None:
         p["email"] = email
@@ -735,16 +746,16 @@ def ical_to_jscal(ical_str: str, calendar_id: str | None = None) -> dict:
     jscal: dict = {
         "@type": "Event",
         # RFC 8984 itself has no "version" property; draft-ietf-calext-
-        # jscalendarbis (the 2.0 successor spec) adds it and registers "1.0"
-        # for data conforming to RFC 8984, "2.0" for jscalendarbis. This
-        # conversion does not emit any 2.0-only properties (COORDINATES,
-        # SHOW-WITHOUT-TIME), so "1.0" would be the strictly accurate value.
-        # We send "2.0" anyway: Cyrus's current test image rejects "1.0"
-        # outright (requires "2.0" on every Event), and this repo's own CI
-        # and integration tests run against that same image. Revisit once M4
-        # adds real jscalendarbis support, or once older servers matter more
-        # than this one.
-        "version": "2.0",
+        # jscalendarbis (the 2.0 successor spec) adds it, optional, and
+        # registers "1.0" for data conforming to RFC 8984, "2.0" for
+        # jscalendarbis. This conversion does not emit any 2.0-only
+        # properties (COORDINATES, SHOW-WITHOUT-TIME), so it's correctly
+        # left unset rather than claiming either version: confirmed live
+        # that Cyrus's current test image rejects "version" outright in
+        # any value, where an earlier build required "2.0"; Stalwart
+        # accepts the property either present or absent. Revisit once M4
+        # adds real jscalendarbis support and this conversion's output
+        # actually depends on which version applies.
         "uid": uid,
         "title": title,
         "start": start,
@@ -817,16 +828,22 @@ def ical_to_jscal(ical_str: str, calendar_id: str | None = None) -> dict:
         jscal["alerts"] = alerts
 
     # RFC 8984 §4.3.3 defines "recurrenceRules" as RecurrenceRule[], since an
-    # event can in principle have more than one RRULE. Neither test server
-    # this repo targets actually implements that: Cyrus (pinned prodId
-    # "CyrusIMAP.org/Cyrus 3.13.7-545-gc04cece19") rejects the array outright
-    # with invalidProperties, and Stalwart's own CalendarEvent/get also
-    # returns the older singular "recurrenceRule" key, not the array,
-    # confirmed live against both. We follow both servers here, same as the
-    # "version" and calendarAddress/sendTo fixes: only the first RRULE is
-    # kept if more than one is present, which is a real but rare data-loss
-    # case (multiple RRULE lines on one VEVENT are uncommon in practice), so
-    # it's logged rather than silent or raised.
+    # event can in principle have more than one RRULE. Only the first RRULE
+    # is kept if more than one is present, which is a real but rare
+    # data-loss case (multiple RRULE lines on one VEVENT are uncommon in
+    # practice), so it's logged rather than silent or raised.
+    #
+    # Emitted here under the singular "recurrenceRule" key, not the plural
+    # array: which spelling a given server actually accepts on
+    # CalendarEvent/set is not consistent even between the two test servers
+    # this project targets (confirmed live: Cyrus's current image requires
+    # the plural array and rejects the singular, Stalwart requires the
+    # singular and rejects the plural, neither accepts both spellings at
+    # once), so the client layer (_JMAPClientBase._try_recurrence_rule_fallback_key)
+    # detects a single-property invalidProperties rejection naming whichever
+    # key this function emits and retries once with the other spelling,
+    # rather than this conversion trying to guess a target server's dialect
+    # with no information to guess from.
     # Full recurrence override fidelity is its own separate M4 milestone item.
     rule = _first_recurrence_rule(master, "RRULE", event_tzinfo)
     if rule is not None:

@@ -62,13 +62,5 @@ class JMAPAttachment:
         A Link is an attachment when its ``rel`` is ``"enclosure"``
         (:rfc:`8984#section-1.4.11`); other ``links`` entries (e.g. a
         conference URL) are not.
-
-        Known Cyrus limitation, confirmed live: Cyrus (3.13.7-545-gc04cece19)
-        accepts a Link with ``rel: "enclosure"`` with no error, but does not
-        reliably persist it (other ``rel`` values round-trip fine, isolating
-        this to that one value). An attachment written by
-        :meth:`~calendaring_jmap.client.JMAPClient.attach_to_event` may
-        therefore not be classified as one by this method when read back
-        from Cyrus. Stalwart has no such issue.
         """
         return link_data.get("rel") == LINK_REL_ENCLOSURE

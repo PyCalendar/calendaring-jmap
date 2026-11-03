@@ -455,13 +455,17 @@ class AsyncJMAPClient(_JMAPClientBase):
         jscal = self._strip_server_managed_event_properties(event)
         self._resolve_create_calendar_ids(jscal, calendar_id)
         target_account = self._resolve_account(session, account_id)
-        call = build_event_set_create(
-            target_account,
-            {"new-0": jscal},
-            send_scheduling_messages=send_scheduling_messages,
-            if_in_state=if_in_state,
-        )
-        responses = await self._request([call])
+        tried_recurrence_rule_keys: set[str] = set()
+        while True:
+            call = build_event_set_create(
+                target_account,
+                {"new-0": jscal},
+                send_scheduling_messages=send_scheduling_messages,
+                if_in_state=if_in_state,
+            )
+            responses = await self._request([call])
+            if not self._retry_recurrence_rule_create(responses, jscal, tried_recurrence_rule_keys):
+                break
         event_id = self._parse_create_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set
         )
@@ -784,15 +788,21 @@ class AsyncJMAPClient(_JMAPClientBase):
         session = await self._get_session()
         target_account = self._resolve_account(session, account_id)
         patch, nulled = self._build_event_update_patch(event)
+        tried_recurrence_rule_keys: set[str] = set()
         while True:
             responses = await self._request(
                 [build_event_set_update(target_account, {event_id: patch}, if_in_state=if_in_state)]
             )
             drop = self._unsupported_null_keys(responses, event_id, patch, nulled)
-            if not drop:
-                break
-            for key in drop:
-                patch.pop(key, None)
+            if drop:
+                for key in drop:
+                    patch.pop(key, None)
+                continue
+            if self._retry_recurrence_rule_update(
+                responses, event_id, patch, tried_recurrence_rule_keys
+            ):
+                continue
+            break
         self._parse_update_response(
             responses, session.api_url, "CalendarEvent/set", parse_event_set, event_id
         )
